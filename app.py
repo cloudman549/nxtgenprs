@@ -352,6 +352,53 @@ def _serve_static(filename):
         abort(404)
 
 
+@app.route("/manifest.webmanifest")
+def _manifest():
+    """PWA manifest — 'Add to Desktop' ke liye."""
+    from flask import Response
+    import json as _json
+    payload = {
+        "name": Config.APP_NAME,
+        "short_name": Config.APP_NAME,
+        "description": "NXTGen PRS — tickets, PDF storage aur reports.",
+        "start_url": "/",
+        "scope": "/",
+        "display": "standalone",
+        "orientation": "portrait",
+        "background_color": "#0b1220",
+        "theme_color": "#1d4ed8",
+        "icons": [
+            {"src": "/static/nxtgen.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable"},
+        ],
+    }
+    resp = Response(_json.dumps(payload), mimetype="application/manifest+json")
+    resp.headers["Cache-Control"] = "no-cache"
+    return resp
+
+
+@app.route("/sw.js")
+def _service_worker():
+    """Minimal service worker — Chrome me install prompt ke liye zaroori hai."""
+    from flask import Response
+    sw = """
+self.addEventListener('install', function (e) { self.skipWaiting(); });
+self.addEventListener('activate', function (e) { e.waitUntil(self.clients.claim()); });
+self.addEventListener('fetch', function (event) {
+  if (event.request.method !== 'GET') return;
+  var url = new URL(event.request.url);
+  if (url.pathname.indexOf('/api/') === 0) return;
+  if (url.pathname.indexOf('/static/') === 0) return;
+  event.respondWith(fetch(event.request).catch(function () {
+    return caches.match(event.request);
+  }));
+});
+""".strip()
+    resp = Response(sw, mimetype="application/javascript")
+    resp.headers["Cache-Control"] = "no-cache"
+    resp.headers["Service-Worker-Allowed"] = "/"
+    return resp
+
+
 @app.after_request
 def _perf_headers(resp):
     if request.path.startswith("/static/"):

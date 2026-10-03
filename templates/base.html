@@ -11,7 +11,14 @@
   <style>
     body { font-family: 'Plus Jakarta Sans', system-ui, -apple-system, 'Segoe UI', Roboto, Arial, sans-serif; }
   </style>
-  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}?v=60">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}?v=61">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="icon" href="{{ url_for('static', filename='nxtgen.png') }}">
+  <link rel="apple-touch-icon" href="{{ url_for('static', filename='nxtgen.png') }}">
+  <meta name="theme-color" content="#1d4ed8">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="{{ config.APP_NAME }}">
   <script>
     (function () {
       try {
@@ -144,5 +151,6 @@
   {% if session.get('user_id') %}
   <script src="{{ url_for('static', filename='js/chat.js') }}?v=49"></script>
   {% endif %}
+  <script src="{{ url_for('static', filename='js/install.js') }}?v=1"></script>
 </body>
 </html>

@@ -37,7 +37,7 @@ def _derive_region_from_endpoint(endpoint):
 
 
 class Config:
-    APP_NAME = "NXTGen PRS"
+    APP_NAME = "NXTGenPRS"
 
     # ---- Flask / Sessions --------------------------------------------------
     SECRET_KEY = _env("SECRET_KEY") or secrets.token_hex(32)
