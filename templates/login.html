@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}Login - {{ config.APP_NAME }}{% endblock %}
+{% block content %}
+<div class="auth-wrap">
+  <div class="card auth-card">
+    <div class="auth-logo" aria-hidden="true">&#9992;</div>
+    <h1 class="auth-title">{{ config.APP_NAME }}</h1>
+    <p class="muted auth-sub">Apna User ID aur Password daal kar login karein</p>
+
+    {% if error %}
+      <div class="alert alert-error">{{ error }}</div>
+    {% endif %}
+
+    <form method="post" action="{{ url_for('login', next=request.args.get('next')) }}" class="form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <label class="field">
+        <span>User ID</span>
+        <input type="text" name="username" required autocomplete="username" placeholder="apna User ID likhein">
+      </label>
+      <label class="field">
+        <span>Password</span>
+        <input type="password" name="password" required autocomplete="current-password" placeholder="apna password likhein">
+      </label>
+      <button type="submit" class="btn btn-primary btn-block">Login</button>
+    </form>
+
+    <p class="muted center">Admin? <a href="{{ url_for('admin_login') }}">Admin Login</a></p>
+  </div>
+</div>
+{% endblock %}

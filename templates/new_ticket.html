@@ -1,0 +1,189 @@
+{% extends "base.html" %}
+{% block title %}New Ticket - {{ config.APP_NAME }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>New <span class="grad-text">Ticket</span></h1>
+  <p class="muted">Train details bharo, passengers add karo aur ticket save karo.</p>
+</div>
+
+<form id="ticketForm" class="card ticket-form" autocomplete="off">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+  <div class="ticket-grid">
+    <div class="field autocomplete-wrap">
+      <span>From</span>
+      <input type="text" id="srcInput" value="SAHARSA JN - SHC" placeholder="Station code ya naam" autocomplete="off">
+      <div class="autocomplete-box hidden" id="srcBox"></div>
+    </div>
+    <button type="button" id="swapBtn" class="btn btn-ghost btn-sm swap-btn" title="Swap">&#8646;</button>
+    <div class="field autocomplete-wrap">
+      <span>To</span>
+      <input type="text" id="dstInput" value="NEW DELHI - NDLS" placeholder="Station code ya naam" autocomplete="off">
+      <div class="autocomplete-box hidden" id="dstBox"></div>
+    </div>
+    <div class="field">
+      <span>Journey Date</span>
+      <input type="date" id="dateInput">
+    </div>
+    <div class="field">
+      <span>&nbsp;</span>
+      <button type="button" id="findTrainBtn" class="btn btn-primary">Find Train</button>
+    </div>
+  </div>
+
+  <div class="ticket-grid">
+    <div class="field">
+      <span>Boarding</span>
+      <input type="text" id="boardingInput" placeholder="Boarding station">
+    </div>
+    <div class="field autocomplete-wrap">
+      <span>Train No.</span>
+      <input type="text" id="trainInput" value="15565" placeholder="Train number aur naam, e.g. 15565-VAISHALI EXP" autocomplete="off">
+      <div class="autocomplete-box hidden" id="trainBox"></div>
+    </div>
+    <div class="field">
+      <span>Class</span>
+      <select id="clsInput">
+        <option>3A</option><option>3E</option><option>2A</option><option>1A</option>
+        <option selected>SL</option><option>2S</option><option>CC</option><option>EC</option>
+      </select>
+    </div>
+    <div class="field">
+      <span>Quota</span>
+      <select id="quotaInput">
+        <option value="GN" selected>General (GN)</option>
+        <option value="TQ">Tatkal (TQ)</option>
+        <option value="PT">Premium (PT)</option>
+        <option value="LD">Ladies (LD)</option>
+      </select>
+    </div>
+    <div class="field">
+      <span>Train Type</span>
+      <select id="trainTypeInput">
+        <option>Select Train Type</option><option>All</option><option>Rajdhani</option>
+        <option>Duronto</option><option>SF Express</option><option>Express</option><option>Mail</option>
+      </select>
+    </div>
+  </div>
+
+  <div class="ticket-grid mobile-2col">
+    <div class="field">
+      <span>1st Passenger Mobile No.</span>
+      <input type="text" id="mobileInput" maxlength="10" placeholder="Mobile No.">
+    </div>
+    <div class="field">
+      <span>2nd Alternative</span>
+      <input type="text" id="altMobileInput" maxlength="10" placeholder="Alt Mobile">
+    </div>
+  </div>
+
+  <div id="formAvailInfo" class="form-avail hidden"></div>
+
+  <h3 class="form-section-title">Passenger Details</h3>
+  <div class="table-scroll">
+    <table class="pass-table">
+      <thead>
+        <tr>
+          <th>#</th><th>Name</th><th>Age</th><th>Sex</th><th>Choice Birth</th>
+        </tr>
+      </thead>
+      <tbody id="passengerBody"></tbody>
+    </table>
+  </div>
+
+  <div class="pay-wrap">
+    <div class="field">
+      <span>Payment Mode</span>
+      <select id="payModeInput">
+        <option value="Cash" selected>Cash</option>
+        <option value="Scan QR">Scan QR</option>
+        <option value="PhonePe">PhonePe</option>
+      </select>
+    </div>
+    <div class="pay-toggle" id="payToggle">
+      <button type="button" data-val="" class="pay-opt">Unpaid</button>
+      <button type="button" data-val="Advanced" class="pay-opt active">Advanced Paid</button>
+    </div>
+    <div id="advSection">
+      <div class="pay-grid">
+        <div class="field adv-field" id="totalField">
+          <span>Total</span>
+          <div class="rupee-wrap">
+            <span class="rupee-sign hidden" id="totalRupeeSign">&#8377;</span>
+            <input type="text" id="totalAmountInput" placeholder="Total enter" inputmode="numeric">
+          </div>
+        </div>
+        <div class="field adv-field" id="advField">
+          <span>Advanced</span>
+          <div class="rupee-wrap">
+            <span class="rupee-sign hidden" id="rupeeSign">&#8377;</span>
+            <input type="text" id="advAmountInput" placeholder="Advanced enter" inputmode="numeric">
+          </div>
+        </div>
+        <div class="field adv-field due-field" id="dueField">
+          <span>Due</span>
+          <div class="rupee-wrap">
+            <span class="rupee-sign">&#8377;</span>
+            <strong id="dueAmount">0</strong>
+          </div>
+        </div>
+      </div>
+      <div class="field adv-field" id="descField">
+        <span>Description</span>
+        <input type="text" id="orderDescInput" placeholder="Order ke baare me kuch bhi (optional)">
+      </div>
+    </div>
+  </div>
+
+  <div class="ticket-actions">
+    <div id="ticketStatus" class="status hidden"></div>
+    <div class="star-line">
+      <button type="button" id="starToggle" class="btn btn-ghost">&#9734; Star</button>
+      <span class="muted star-note">Star wala ticket kal (1 din pehle journey date) ki report me bhi aaega.</span>
+    </div>
+    <button type="submit" id="saveTicketBtn" class="btn btn-primary btn-lg">Save Ticket</button>
+  </div>
+</form>
+
+<div id="trainModal" class="modal hidden" role="dialog" aria-modal="true">
+  <div class="modal-box modal-wide">
+    <div class="modal-head">
+      <h3>Train List</h3>
+      <input type="date" id="modalDateInput" class="modal-date" title="Journey Date">
+      <div class="quota-btns" id="modalQuotaBtns">
+        <button type="button" class="quota-btn active" data-val="GN">GN</button>
+        <button type="button" class="quota-btn" data-val="TQ">TQ</button>
+        <button type="button" class="quota-btn" data-val="PT">PT</button>
+      </div>
+      <button type="button" id="trainModalClose" class="btn btn-ghost btn-sm">Close</button>
+    </div>
+    <div id="trainModalMsg" class="muted">Loading trains...</div>
+    <div id="trainSel" class="train-sel hidden">
+      <div class="train-sel-info" id="trainSelInfo"></div>
+      <div class="train-sel-actions">
+        <button type="button" id="trainSelSelect" class="btn btn-primary btn-sm">Select</button>
+        <button type="button" id="trainSelCancel" class="btn btn-ghost btn-sm">Cancel</button>
+      </div>
+    </div>
+    <div class="table-scroll">
+      <table class="train-table" id="trainTable">
+        <thead>
+          <tr>
+            <th>Train No</th><th>Train Name</th><th>From</th><th>Depart</th>
+            <th>To</th><th>Arrival</th><th>Travel</th>
+            <th>M</th><th>T</th><th>W</th><th>Th</th><th>F</th><th>S</th><th>Su</th>
+            <th>Classes</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<div id="toastWrap" class="toast-wrap" aria-live="polite"></div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/new_ticket.js') }}?v=51"></script>
+{% endblock %}

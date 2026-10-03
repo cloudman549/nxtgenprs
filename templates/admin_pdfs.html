@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+{% block title %}Admin Panel - {{ config.APP_NAME }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Admin <span class="grad-text">Panel</span></h1>
+  <p class="muted">
+    Naye PDFs upload karne ke liye <a href="{{ url_for('index') }}">home page</a> use karein. Yahaan sirf naye employees banaye jaate hain.
+  </p>
+</div>
+
+<input type="hidden" id="maxSizeMb" value="{{ max_size_mb }}">
+
+<div class="card">
+  <div class="list-head">
+    <h2><span class="card-head-accent"></span>Create Employee <span class="muted" style="font-size:0.8rem;font-weight:500;">(sirf admin se)</span></h2>
+  </div>
+  <form id="createEmpForm" class="form user-create-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div class="user-form-grid">
+      <label class="field">
+        <span>Full Name *</span>
+        <input type="text" name="full_name" required minlength="2" maxlength="60" placeholder="pure naam se likhein">
+      </label>
+      <label class="field">
+        <span>Age *</span>
+        <input type="number" name="age" required min="16" max="100" placeholder="umar">
+      </label>
+      <label class="field">
+        <span>Aadhar No. * (12 digit)</span>
+        <input type="text" name="aadhar" required minlength="12" maxlength="12" pattern="[0-9]{12}" placeholder="12 digit aadhar">
+      </label>
+      <label class="field">
+        <span>Work Experience</span>
+        <input type="text" name="work_exp" maxlength="60" placeholder="e.g. 2 saal ticket booking">
+      </label>
+      <label class="field">
+        <span>Department *</span>
+        <select name="department" required>
+          <option value="" disabled selected>Chunein...</option>
+          <option value="Ticket Booking">Ticket Booking</option>
+          <option value="Restaurant">Restaurant</option>
+          <option value="Tumble Dry">Tumble Dry</option>
+        </select>
+      </label>
+      <label class="field">
+        <span>Joining Date *</span>
+        <input type="date" name="joining_date" required>
+      </label>
+      <label class="field">
+        <span>Password * (min 4 chars, isi se login hoga)</span>
+        <input type="text" name="password" required minlength="4" maxlength="40" autocomplete="off">
+      </label>
+      <label class="field">
+        <span>Profile Photo (PNG/JPG/GIF/WEBP, max 5MB)</span>
+        <input type="file" name="photo" accept=".png,.jpg,.jpeg,.gif,.webp,image/png,image/jpeg,image/gif,image/webp">
+      </label>
+    <label class="field field-wide">
+        <span>Full Address *</span>
+        <textarea name="address" required minlength="5" maxlength="300" rows="2" placeholder="pura address likhein"></textarea>
+      </label>
+    </div>
+    <div class="muted" style="margin:6px 0 12px;font-size:0.85rem;">
+      Employee ID apne aap banega: <b>NAAM + Umar</b> (e.g. Deepak Kumar, 26 = <b>DEEPAK26</b>). Photo di to ID card pe aaegi. Address card pe click karne pe (palat ke) dikhega.
+    </div>
+    <button type="submit" id="createEmpBtn" class="btn btn-primary">Create Employee</button>
+    <button type="reset" class="btn btn-ghost btn-sm">Reset</button>
+  </form>
+  <button type="button" id="empToggleBtn" class="btn btn-ghost">View Employees</button>
+  <div id="empList" class="emp-cards hidden">
+    <div class="empty">Employees loading...</div>
+  </div>
+</div>
+
+<div id="toastWrap" class="toast-wrap" aria-live="polite"></div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/admin_pdfs.js') }}?v=50"></script>
+{% endblock %}

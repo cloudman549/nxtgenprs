@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block title %}{{ config.APP_NAME }} - Home{% endblock %}
+{% block content %}
+<input type="hidden" id="maxSizeMb" value="{{ max_size_mb }}">
+<input type="hidden" id="isLoggedIn" value="{{ 1 if current_user else 0 }}">
+
+<section class="uploader">
+  <h1 class="uploader-title">{{ config.APP_NAME }} <span class="grad-text">PDF</span></h1>
+  <p class="uploader-sub muted">Khiyaan choose karo ya PDFs yahan girwao. Upload, list &amp; download — sab ke liye pehle login karna hoga.</p>
+
+  <div id="dropZone" class="dropzone" tabindex="0">
+    <input type="file" id="fileInput" accept=".pdf,application/pdf" multiple class="file-input-hidden">
+    <div class="dropzone-inner">
+      <div class="dropzone-arrow" aria-hidden="true">&#8595;</div>
+      <div class="dropzone-title">Drag &amp; drop PDF files here</div>
+      <div class="dropzone-sub muted">or</div>
+      <button type="button" id="pickBtn" class="btn btn-primary btn-lg">Choose a file</button>
+      <div class="dropzone-sub muted">PDF upload free &middot; <strong>{{ max_size_mb }} MB</strong> max &middot; multiple files allowed</div>
+    </div>
+  </div>
+
+  <div class="access-visible">
+    <label class="field">
+      <span>PDF ka User ID</span>
+      <input type="text" id="accessUserInput" autocomplete="off" placeholder="User ID daalein (optional)">
+    </label>
+    <label class="field">
+      <span>PDF ka Password</span>
+      <input type="password" id="accessPassInput" autocomplete="off" placeholder="Password daalein (optional)">
+    </label>
+  </div>
+
+  <div id="uploadProgress" class="progress hidden">
+    <div class="progress-label" id="uploadProgressLabel">Uploading...</div>
+    <div class="progress-track">
+      <div class="progress-bar" id="uploadProgressBar"></div>
+    </div>
+    <div class="progress-pct" id="uploadProgressPct">0%</div>
+  </div>
+
+  <div id="pendingWrap" class="pending-wrap hidden">
+    <div class="pending-head">Files selected — Upload dabao</div>
+    <div id="pendingList" class="pending-list"></div>
+    <button type="button" id="uploadBtn" class="btn btn-primary btn-lg" disabled>Upload</button>
+  </div>
+
+  <div id="uploadStatus" class="status hidden"></div>
+</section>
+
+<div id="toastWrap" class="toast-wrap" aria-live="polite"></div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/home.js') }}?v=46"></script>
+{% endblock %}

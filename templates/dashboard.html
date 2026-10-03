@@ -1,0 +1,132 @@
+{% extends "base.html" %}
+{% block title %}Dashboard - {{ config.APP_NAME }}{% endblock %}
+{% block content %}
+<input type="hidden" id="isLoggedIn" value="1">
+
+<div class="dash-tabs">
+  <button type="button" class="dash-tab active" data-tab="pdfs">Available PDF</button>
+  <button type="button" class="dash-tab" data-tab="fresh">Available Fresh ID</button>
+  <button type="button" class="dash-tab" data-tab="order">Order</button>
+</div>
+
+<section id="filesSection" data-section="pdfs" class="files-section">
+  <div class="card">
+    <div class="list-head">
+      <h2><span class="card-head-accent"></span>Available PDFs</h2>
+      <button type="button" id="refreshBtn" class="btn btn-ghost btn-sm">Refresh</button>
+    </div>
+    <div class="list-toolbar">
+      <label class="field list-search">
+        <span>PDF Search</span>
+        <input type="text" id="searchInput" placeholder="PDF ka naam likh ke khojein..." autocomplete="off">
+      </label>
+      <label class="field list-datefilter">
+        <span>Date Filter</span>
+        <select id="dateFilter">
+          <option value="today" selected>Today</option>
+          <option value="all">All Days</option>
+          <option value="custom">Choose From Calendar</option>
+        </select>
+      </label>
+      <label class="field list-datefilter custom-date-wrap hidden" id="customDateWrap">
+        <span>Choose Date</span>
+        <input type="date" id="customDate">
+      </label>
+    </div>
+    <div id="pdfList" class="pdf-list">
+      <div class="empty" id="emptyState">Loading...</div>
+    </div>
+  </div>
+</section>
+
+<section id="freshSection" data-section="fresh" class="files-section hidden">
+  <div class="card">
+    <div class="list-head">
+      <h2><span class="card-head-accent"></span>Available Fresh ID</h2>
+      <button type="button" id="refreshFreshBtn" class="btn btn-ghost btn-sm">Refresh</button>
+    </div>
+    <p class="muted">Yahan sirf list dikhti hai. Naya ID add karne ke liye "ID" page se bulk add karein. ID pe click karke select karo, phir Ctrl+C se sirf IDs copy hongi.</p>
+    <div id="freshSummary" class="fw-summary"></div>
+    <div id="freshSelBar" class="fw-sel-bar hidden">
+      <span id="freshSelCount">0 selected</span>
+      <button type="button" id="freshSelCopy" class="btn btn-primary btn-sm">Copy IDs</button>
+      <button type="button" id="freshSelClear" class="btn btn-ghost btn-sm">Clear</button>
+    </div>
+    <div id="freshList" class="user-list">
+      <div class="empty">IDs loading...</div>
+    </div>
+  </div>
+</section>
+
+<section id="orderSection" data-section="order" class="files-section hidden">
+  <div class="card">
+    <div class="list-head">
+      <h2><span class="card-head-accent"></span>Order</h2>
+      <button type="button" id="refreshOrderBtn" class="btn btn-ghost btn-sm">Refresh</button>
+    </div>
+    <div class="order-summary" id="orderSummary"></div>
+    <div class="order-toolbar">
+      <label class="field list-filter">
+        <span>From Station</span>
+        <input type="text" id="orderFromInput" placeholder="From station" autocomplete="off">
+      </label>
+      <label class="field list-filter">
+        <span>To Station</span>
+        <input type="text" id="orderToInput" placeholder="To station" autocomplete="off">
+      </label>
+      <label class="field list-filter">
+        <span>Train No.</span>
+        <input type="text" id="orderTrainInput" placeholder="Train no." autocomplete="off">
+      </label>
+      <div class="quota-chips" id="orderQuotaChips">
+        <button type="button" class="chip order-chip active" data-q="">All</button>
+        <button type="button" class="chip order-chip" data-q="GN">GN</button>
+        <button type="button" class="chip order-chip" data-q="TQ">TQ</button>
+        <button type="button" class="chip order-chip" data-q="PT">PT</button>
+        <button type="button" class="chip order-chip" data-q="LD">LD</button>
+      </div>
+      <div class="quota-chips" id="orderClassChips">
+        <button type="button" class="chip order-chip active" data-cls="">All Class</button>
+        <button type="button" class="chip order-chip" data-cls="SL">SL (+2S)</button>
+        <button type="button" class="chip order-chip" data-cls="AC">AC (1A/2A/3A/3E/CC/EC)</button>
+      </div>
+      <label class="field list-datefilter">
+        <span>Date</span>
+        <select id="orderDateFilter">
+          <option value="all" selected>All Days</option>
+          <option value="today">Today</option>
+          <option value="custom">Choose Date</option>
+        </select>
+      </label>
+      <label class="field list-datefilter custom-date-wrap hidden" id="orderCustomDateWrap">
+        <span>Custom Date</span>
+        <input type="date" id="orderCustomDate">
+      </label>
+      <label class="field list-datefilter" id="journeyDateWrap">
+        <span>Journey Date</span>
+        <input type="date" id="orderJourneyDate">
+      </label>
+      <button type="button" id="downloadOrderPdfBtn" class="btn btn-primary btn-sm">Download Order PDF</button>
+    </div>
+    <div id="orderList" class="order-list">
+      <div class="empty">Orders loading...</div>
+    </div>
+  </div>
+</section>
+
+<div id="orderModal" class="modal hidden" role="dialog" aria-modal="true">
+  <div class="modal-box modal-wide">
+    <div class="modal-head">
+      <h3 id="orderModalTitle">Ticket Detail</h3>
+      <button type="button" id="orderModalClose" class="btn btn-ghost btn-sm">Close</button>
+    </div>
+    <div id="orderModalBody"></div>
+  </div>
+</div>
+
+<div id="toastWrap" class="toast-wrap" aria-live="polite"></div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/dashboard.js') }}?v=54"></script>
+{% endblock %}

@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}ID - {{ config.APP_NAME }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1><span class="grad-text">ID</span></h1>
+  <p class="muted">Multiple User ID ek saath daalo, common password daalo aur Update dabao — sab IDs Available Fresh ID me list ho jayengi.</p>
+</div>
+
+<form id="bulkIdForm" class="card ticket-form" autocomplete="off">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+  <div class="field">
+    <span>User IDs <em class="muted">(har line me ek ID)</em></span>
+    <textarea id="bulkIdsInput" class="bulk-textarea" rows="10" placeholder="phir123&#10;phir456&#10;phir789" required></textarea>
+  </div>
+  <div class="field">
+      <span>Common Password</span>
+      <input type="text" id="bulkPassInput" required placeholder="sab IDs ka same password">
+    </div>
+  </div>
+
+  <div class="ticket-actions">
+    <div id="bulkStatus" class="status hidden"></div>
+    <button type="submit" id="bulkBtn" class="btn btn-primary btn-lg">Update</button>
+  </div>
+</form>
+
+<div id="toastWrap" class="toast-wrap" aria-live="polite"></div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/bulk_id.js') }}?v=45"></script>
+{% endblock %}

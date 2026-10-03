@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}Admin Login - {{ config.APP_NAME }}{% endblock %}
+{% block content %}
+<div class="auth-wrap">
+  <div class="card auth-card">
+    <div class="auth-logo" aria-hidden="true">&#128272;</div>
+    <h1 class="auth-title">Admin Login</h1>
+    <p class="muted auth-sub">Sirf admin accounts yahan se login kar sakte hain</p>
+
+    {% if error %}
+      <div class="alert alert-error">{{ error }}</div>
+    {% endif %}
+
+    <form method="post" action="{{ url_for('admin_login') }}" class="form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <label class="field">
+        <span>Username or Email</span>
+        <input type="text" name="username" required autocomplete="username" placeholder="admin-username">
+      </label>
+      <label class="field">
+        <span>Password</span>
+        <input type="password" name="password" required autocomplete="current-password" placeholder="********">
+      </label>
+      <button type="submit" class="btn btn-primary btn-block">Admin Sign in</button>
+    </form>
+
+    <p class="muted center">Normal user? <a href="{{ url_for('login') }}">Normal Login</a></p>
+  </div>
+</div>
+{% endblock %}

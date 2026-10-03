@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}Notepad - {{ config.APP_NAME }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1><span class="grad-text">Notepad</span></h1>
+  <p class="muted">Apni diary — jo bhi likho, auto save ho jata hai. Login ke baad sirf tumhe dikhta hai.</p>
+</div>
+
+<div class="card">
+  <div class="list-head">
+    <h2><span class="card-head-accent"></span>Meri Diary</h2>
+    <div class="notepad-status" id="notepadStatus">Loading...</div>
+  </div>
+  <textarea id="notepadContent" class="notepad-textarea" placeholder="Yahan likho... jo likhoge wo apne aap save ho jayega."></textarea>
+  <div class="notepad-foot">
+    <button type="button" id="notepadSaveBtn" class="btn btn-primary btn-sm">Save Now</button>
+    <button type="button" id="notepadClearBtn" class="btn btn-ghost btn-sm">Clear</button>
+  </div>
+</div>
+
+<div id="toastWrap" class="toast-wrap" aria-live="polite"></div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/notepad.js') }}?v=45"></script>
+{% endblock %}
