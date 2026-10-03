@@ -247,6 +247,19 @@ def _bump_user_cache():
     _USER_CACHE.clear()
 
 
+def _find_user_by_identifier(identifier):
+    """(user, db_error) — DB/network failure pe 500 nahi, message return karta hai."""
+    ident = (identifier or "").strip()
+    try:
+        user = users_col.find_one({"username": ident})
+        if not user:
+            user = users_col.find_one({"email": ident.lower()})
+        return user, None
+    except PyMongoError:
+        logger.exception("User lookup failed")
+        return None, "Database se connect nahi ho paya. 30 second baad dobara try karein."
+
+
 def get_current_user():
     """Cached per-request user lookup so the DB is hit only once per request."""
     if not hasattr(g, "_current_user"):
@@ -603,8 +616,10 @@ def login():
         else:
             identifier = (request.form.get("username") or "").strip()
             password = request.form.get("password") or ""
-            user = users_col.find_one({"username": identifier}) or users_col.find_one({"email": identifier.lower()})
-            if user and user.get("role") == "admin":
+            user, db_error = _find_user_by_identifier(identifier)
+            if db_error:
+                error = db_error
+            elif user and user.get("role") == "admin":
                 error = "Ye admin account hai. Admin Login use karein."
             elif user and not user.get("password_hash"):
                 # purane accounts (jab password nahi tha) abhi bhi chalte rahein
@@ -647,8 +662,10 @@ def admin_login():
         else:
             identifier = (request.form.get("username") or "").strip()
             password = request.form.get("password") or ""
-            user = users_col.find_one({"username": identifier}) or users_col.find_one({"email": identifier.lower()})
-            if user and check_password_hash(user.get("password_hash", ""), password):
+            user, db_error = _find_user_by_identifier(identifier)
+            if db_error:
+                error = db_error
+            elif user and check_password_hash(user.get("password_hash", ""), password):
                 if user.get("role") != "admin":
                     error = "Ye normal user account hai. Normal login use karein."
                 else:
