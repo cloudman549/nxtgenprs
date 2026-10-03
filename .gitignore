@@ -1,0 +1,14 @@
+.env
+.env.*
+!.env.example
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+*.log
+server.err
+server.out
+server.pid
+.DS_Store
+Thumbs.db
+.vercel
