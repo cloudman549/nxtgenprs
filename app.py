@@ -94,8 +94,8 @@ if Config.SECRET_KEY.startswith("dev-only"):
 # ---------------------------------------------------------------- MongoDB
 mongo_client = MongoClient(
     Config.MONGO_URI,
-    serverSelectionTimeoutMS=5000,
-    connectTimeoutMS=8000,
+    serverSelectionTimeoutMS=20000,
+    connectTimeoutMS=20000,
     socketTimeoutMS=60000,
     maxPoolSize=20,
     minPoolSize=1,
@@ -161,6 +161,22 @@ def _init_db():
 
 
 _init_db()
+
+
+def _warm_mongo_background():
+    try:
+        _prime_mongo()
+        logger.info("Mongo pool warmed")
+    except Exception:
+        logger.warning("Mongo warm-up skipped")
+
+
+try:
+    import threading as _threading
+
+    _threading.Thread(target=_warm_mongo_background, daemon=True).start()
+except Exception:
+    pass
 
 
 def _backfill_expires_at():
@@ -250,14 +266,23 @@ def _bump_user_cache():
 def _find_user_by_identifier(identifier):
     """(user, db_error) — DB/network failure pe 500 nahi, message return karta hai."""
     ident = (identifier or "").strip()
-    try:
-        user = users_col.find_one({"username": ident})
-        if not user:
-            user = users_col.find_one({"email": ident.lower()})
-        return user, None
-    except PyMongoError:
-        logger.exception("User lookup failed")
-        return None, "Database se connect nahi ho paya. 30 second baad dobara try karein."
+    last_exc = None
+    for attempt in range(2):
+        try:
+            user = users_col.find_one({"username": ident})
+            if not user:
+                user = users_col.find_one({"email": ident.lower()})
+            return user, None
+        except PyMongoError as exc:
+            last_exc = exc
+            logger.warning("User lookup attempt %d failed: %s", attempt + 1, exc)
+            if attempt == 0:
+                try:
+                    _prime_mongo()
+                except Exception:
+                    pass
+    logger.error("User lookup failed: %s", last_exc)
+    return None, "Database se connect nahi ho paya. 30 second baad dobara try karein."
 
 
 def get_current_user():
