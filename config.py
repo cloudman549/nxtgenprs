@@ -1,3 +1,4 @@
+import hashlib
 import os
 import secrets
 
@@ -40,7 +41,11 @@ class Config:
     APP_NAME = "NXTGenPRS"
 
     # ---- Flask / Sessions --------------------------------------------------
-    SECRET_KEY = _env("SECRET_KEY") or secrets.token_hex(32)
+    # NOTE: Vercel/serverless pe har cold start me random secret se sessions
+    # invalid ho jaate hain (login + CSRF break). Isliye fallback STABLE hai.
+    SECRET_KEY = _env("SECRET_KEY") or hashlib.sha256(
+        ("nxtgenprs|session-salt|" + _env("MONGO_URI")).encode("utf-8")
+    ).hexdigest()
     SESSION_COOKIE_HTTPONLY = True
     SESSION_COOKIE_SAMESITE = "Lax"
     SESSION_COOKIE_SECURE = _env_bool("SESSION_COOKIE_SECURE")

@@ -325,8 +325,25 @@ def set_csrf_token():
 
 def validate_csrf():
     supplied = request.headers.get("X-CSRF-Token") or request.form.get("csrf_token")
+    if not supplied:
+        return False
+    # Session token, ya phir same-token cookie (serverless multi-instance safe).
     stored = session.get("csrf_token", "")
-    return bool(supplied and stored and secrets.compare_digest(supplied, stored))
+    if stored and secrets.compare_digest(supplied, stored):
+        return True
+    cookie_tok = request.cookies.get("csrf_token", "")
+    return bool(cookie_tok and secrets.compare_digest(supplied, cookie_tok))
+
+
+@app.before_request
+def _ensure_csrf_cookie():
+    """GET par CSRF token session + cookie dono me rakho (reload-safe)."""
+    if request.method in ("GET", "HEAD"):
+        tok = session.get("csrf_token")
+        if not tok:
+            tok = secrets.token_hex(32)
+            session["csrf_token"] = tok
+        g.csrf_token = tok
 
 
 def csrf_protected(view):
@@ -401,6 +418,10 @@ self.addEventListener('fetch', function (event) {
 
 @app.after_request
 def _perf_headers(resp):
+    tok = getattr(g, "csrf_token", None)
+    if tok:
+        resp.set_cookie("csrf_token", tok, max_age=60 * 60 * 8, httponly=False,
+                        samesite="Lax", secure=False, path="/")
     if request.path.startswith("/static/"):
         # Cache-busting ?v= already in URLs; static files never change under a v.
         resp.headers["Cache-Control"] = "public, max-age=604800, immutable"
