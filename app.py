@@ -18,7 +18,7 @@ import click
 from bson import ObjectId
 from bson.errors import InvalidId
 from flask import (Flask, abort, g, jsonify, redirect, render_template, request,
-                   send_file, session, url_for)
+                   send_file, send_from_directory, session, url_for)
 from pymongo import ASCENDING, MongoClient
 from pymongo.errors import DuplicateKeyError, PyMongoError
 from werkzeug.exceptions import RequestEntityTooLarge
@@ -341,6 +341,15 @@ def csrf_protected(view):
 
 
 app.jinja_env.globals["csrf_token"] = set_csrf_token
+
+
+@app.route("/static/<path:filename>")
+def _serve_static(filename):
+    """Vercel serverless me static files Flask se serve karo (config se independent)."""
+    try:
+        return send_from_directory(app.static_folder, filename)
+    except Exception:
+        abort(404)
 
 
 @app.after_request
