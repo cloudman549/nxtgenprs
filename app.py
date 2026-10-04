@@ -832,7 +832,7 @@ def api_list_pdfs_public(user):
                 )
                 .sort("uploaded_at", -1)
                 .limit(200)
-                .hint([("uploaded_at", -1)])  # Force index usage
+                .hint([("uploaded_at", ASCENDING)])  # Must match index created in _init_db()
             )
             payload = {"success": True, "pdfs": [_serialize_pdf(d) for d in docs]}
             _cache_set(PUBLIC_LIST_CACHE_KEY, payload)
