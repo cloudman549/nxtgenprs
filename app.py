@@ -124,6 +124,10 @@ fresh_ids_col = db["fresh_ids"]
 notepad_col = db["notepad"]
 
 chat_col = db["chat_messages"]
+try:
+    chat_col.create_index("ts")
+except Exception:  # index already exists or mongo unavailable at import
+    pass
 
 call_members_col = db["call_members"]
 call_signals_col = db["call_signals"]
@@ -440,14 +444,24 @@ def _manifest():
         "name": Config.APP_NAME,
         "short_name": Config.APP_NAME,
         "description": "NXTGen PRS — tickets, PDF storage aur reports.",
+        "id": "/",
         "start_url": "/",
         "scope": "/",
         "display": "standalone",
-        "orientation": "portrait",
+        "display_override": ["standalone", "minimal-ui", "browser"],
+        "orientation": "portrait-primary",
         "background_color": "#0b1220",
         "theme_color": "#1d4ed8",
+        "categories": ["business", "productivity"],
         "icons": [
-            {"src": "/static/nxtgen.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable"},
+            {"src": "/static/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any"},
+            {"src": "/static/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any"},
+            {"src": "/static/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "maskable"},
+            {"src": "/static/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable"},
+        ],
+        "shortcuts": [
+            {"name": "New Ticket", "url": "/new-ticket"},
+            {"name": "Dashboard", "url": "/dashboard"},
         ],
     }
     resp = Response(_json.dumps(payload), mimetype="application/manifest+json")
@@ -2753,6 +2767,26 @@ def api_chat_send(user):
         return jsonify({"success": False, "error": "Message bheja nahi ja saka."}), 500
     doc["_id"] = result.inserted_id
     return jsonify({"success": True, "message": "Bhej diya.", "msg": _serialize_chat_msg(doc)}), 201
+
+
+@app.route("/api/chat/messages/history", methods=["DELETE"])
+@login_required
+@csrf_protected
+def api_chat_clear_history(user):
+    if user.get("role") != "admin":
+        return _json_error("Sirf admin hi purana chat clear kar sakta hai.", 403)
+    ist = timezone(timedelta(hours=5, minutes=30))
+    today_start = datetime.now(ist).replace(hour=0, minute=0, second=0, microsecond=0)
+    try:
+        result = chat_col.delete_many({"ts": {"$lt": today_start}})
+    except PyMongoError:
+        logger.exception("Could not clear chat history")
+        return _json_error("Purana chat clear nahi hua.", 500)
+    return jsonify({
+        "success": True,
+        "deleted": result.deleted_count,
+        "message": "Purana chat clear ho gaya. Aaj ke messages safe hain.",
+    })
 
 
 @app.route("/api/chat/images", methods=["POST"])

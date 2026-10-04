@@ -11,10 +11,11 @@
   <style>
     body { font-family: 'Plus Jakarta Sans', system-ui, -apple-system, 'Segoe UI', Roboto, Arial, sans-serif; }
   </style>
-  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}?v=61">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}?v=66">
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="icon" href="{{ url_for('static', filename='nxtgen.png') }}">
-  <link rel="apple-touch-icon" href="{{ url_for('static', filename='nxtgen.png') }}">
+  <link rel="apple-touch-icon" sizes="180x180" href="{{ url_for('static', filename='apple-touch-icon.png') }}">
+<link rel="icon" type="image/png" sizes="64x64" href="{{ url_for('static', filename='favicon-64.png') }}">
   <meta name="theme-color" content="#1d4ed8">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
@@ -33,7 +34,7 @@
     <div class="topbar-inner">
       <div class="topbar-brand-row">
         <a href="{{ url_for('index') }}" class="brand">
-          <span class="brand-logo" aria-hidden="true">&#9992;</span>
+          <span class="brand-logo" id="brandInstall" role="button" tabindex="0" title="App install karo (shortcut banayein)">&#9992;<span class="brand-install-dot" aria-hidden="true"></span></span>
           <span>{{ config.APP_NAME }}</span>
         </a>
         <img src="{{ url_for('static', filename='nxtgen.png') }}" alt="logo" class="mid-logo">
@@ -98,6 +99,9 @@
     <div id="chatPanel" class="chat-panel hidden">
       <div class="chat-head">
         <button type="button" id="chatMin" class="chat-icon-btn chat-min-btn" title="Minimize karo" aria-label="Chat minimize karo">&#8211;</button>
+        {% if is_admin %}
+        <button type="button" id="chatClear" class="chat-icon-btn danger" title="Purana chat clear karo (aaj ke messages rahenge)" aria-label="Purana chat clear karo">&#128465;</button>
+        {% endif %}
         <span class="chat-title">Group Chat</span>
         <button type="button" id="chatCall" class="chat-icon-btn" title="Voice group call join karo">&#128222;</button>
         <button type="button" id="chatMute" class="chat-icon-btn" title="Beep mute karo">&#128266;</button>
@@ -105,10 +109,11 @@
       <div id="callBar" class="call-bar hidden">
         <span class="call-status"><span id="callDot" class="call-dot"></span><span id="callLabel">Voice Call</span></span>
         <span id="callPeers" class="call-peers"></span>
+        <button type="button" id="callSpeaker" class="chat-icon-btn call-btn" title="Speaker on/off (hands-free)">&#128266;</button>
         <button type="button" id="callMute" class="chat-icon-btn call-btn" title="Mic on/off">&#127908;</button>
         <button type="button" id="callLeave" class="chat-icon-btn call-btn call-leave" title="Call chhodo">&#128722;</button>
       </div>
-      <div id="callAudio" class="hidden"></div>
+      <div id="callAudio" class="call-audio-holder"></div>
       <div id="chatMsgs" class="chat-msgs"></div>
       <div class="chat-input-row">
         <label class="chat-attach" title="Image bhejo">
@@ -116,7 +121,11 @@
           <span aria-hidden="true">&#128206;</span>
         </label>
         <input id="chatText" class="chat-input" placeholder="Message likho..." maxlength="2000" autocomplete="off">
-        <button type="button" id="chatSend" class="chat-send" title="Bhejo">&#10148;</button>
+        <button type="button" id="chatSend" class="chat-send" title="Bhejo" aria-label="Message bhejo">
+          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path fill="currentColor" d="M3.4 20.4l17.45-7.48a1 1 0 0 0 0-1.84L3.4 3.6a.99.99 0 0 0-1.39.91L2 9.12c0 .5.37.93.87.99L17 12 2.87 13.88c-.5.07-.87.5-.87 1l.01 4.61c0 .71.73 1.2 1.39.91z"></path>
+          </svg>
+        </button>
       </div>
     </div>
   </div>
@@ -149,8 +158,8 @@
     })();
   </script>
   {% if session.get('user_id') %}
-  <script src="{{ url_for('static', filename='js/chat.js') }}?v=49"></script>
+  <script src="{{ url_for('static', filename='js/chat.js') }}?v=54"></script>
   {% endif %}
-  <script src="{{ url_for('static', filename='js/install.js') }}?v=1"></script>
+  <script src="{{ url_for('static', filename='js/install.js') }}?v=2"></script>
 </body>
 </html>

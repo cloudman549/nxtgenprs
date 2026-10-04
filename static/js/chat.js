@@ -113,12 +113,14 @@
 
   function renderBadge() {
     if (!badge) return;
-    if (unread > 0) {
-      badge.textContent = unread > 99 ? "99+" : String(unread);
-      badge.classList.remove("hidden");
-    } else {
-      badge.classList.add("hidden");
-    }
+    try {
+      if (unread > 0) {
+        badge.textContent = unread > 99 ? "99+" : String(unread);
+        badge.classList.remove("hidden");
+      } else {
+        badge.classList.add("hidden");
+      }
+    } catch (e) {}
   }
 
   function chatToast(txt, type) {
@@ -211,12 +213,50 @@ function notify(m) {
   if (minBtn) minBtn.addEventListener("click", function () {
     if (OPEN) openPanel(false);
   });
+  var clearBtn = document.getElementById("chatClear");
+  if (clearBtn) clearBtn.addEventListener("click", function () {
+    if (!window.confirm("PURANA chat (aaj ke alawa) delete ho jayega. Aaj ke messages safe rahenge. Chalega?")) return;
+    clearBtn.disabled = true;
+    fetch("/api/chat/messages/history", {
+      method: "DELETE",
+      headers: { "X-CSRF-Token": csrf }
+    }).then(function (r) {
+      return r.json().catch(function () {
+        return { success: false, error: "Server error (HTTP " + r.status + ") - server restart chahiye hoga." };
+      });
+    }).then(function (d) {
+      if (d && d.success) {
+        msgs.innerHTML = "";
+        lastId = "";
+        had = false;
+        unread = 0;
+        lastDayKey = "";
+        renderBadge();
+        chatToast((d.deleted || 0) + " purane message delete. Aaj ke bache hain.", "ok");
+        pollNow();
+      } else {
+        chatToast((d && d.error) || "Purana chat clear nahi hua.", "");
+      }
+    }).catch(function () {
+      chatToast("Network problem. Dobara try karo.", "");
+    }).then(function () {
+      clearBtn.disabled = false;
+    });
+  });
   muteBtn.addEventListener("click", function () {
     muted = !muted;
     try { localStorage.setItem("chatMutedV2", muted ? "1" : "0"); } catch (e) {}
     setMuteIcon();
     chatToast(muted ? "Beep mute hai." : "Beep on ho gaya.", muted ? "" : "ok");
   });
+
+  function syncSendState() {
+    if (!send) return;
+    var has = !!(text.value || "").trim();
+    send.classList.toggle("ready", has);
+  }
+  syncSendState();
+  text.addEventListener("input", syncSendState);
 
   text.addEventListener("keydown", function (e) {
     if (e.key === "Enter") { e.preventDefault(); sendText(); }
@@ -233,10 +273,11 @@ function notify(m) {
       body: JSON.stringify({ text: v })
     }).then(function (r) { return r.json(); }).then(function (d) {
       send.disabled = false;
-      if (d.success) {
-        text.value = "";
-        appendMsg(d.msg);
-        text.focus();
+if (d.success) {
+      text.value = "";
+      syncSendState();
+      appendMsg(d.msg);
+      text.focus();
       } else {
         chatToast(d.error || "Bhejne me problem.", "");
       }
@@ -286,20 +327,32 @@ function notify(m) {
       if (!d || !d.success) return;
       var first = !had;
       meId = d.me_id || "";
+      var fresh = [];
       (d.messages || []).forEach(function (m) {
-        if (msgs.querySelector('[data-mid="' + m.id + '"]')) return;
-        appendMsg(m);
-        if (!first && m.user_id && m.user_id !== meId) {
-          unread++;
-          beep();
-          notify(m);
-        }
+        if (msgs.querySelector('[data-mid="' + m.id + '"]')) { lastId = m.id; return; }
+        try { appendMsg(m); } catch (e) {}
         lastId = m.id;
+        if (!first && m.user_id && m.user_id !== meId && !OPEN) fresh.push(m);
       });
-      if (first) unread = 0;
       had = true;
-      if (first) { markRead(); scroll(false); }
-      renderBadge();
+      if (first) {
+        unread = 0;
+        markRead();
+        scroll(false);
+        renderBadge();
+        return;
+      }
+      if (fresh.length) {
+        unread += fresh.length;
+        if (unread > 99) unread = 99;
+        renderBadge();
+        fresh.forEach(function (m) {
+          try { beep(); } catch (e) {}
+          try { notify(m); } catch (e) {}
+        });
+      } else {
+        renderBadge();
+      }
     }).catch(function () {});
   }
 
@@ -323,18 +376,95 @@ function notify(m) {
   var callPeers = document.getElementById("callPeers");
   var callMuteBtn = document.getElementById("callMute");
   var callLeaveBtn = document.getElementById("callLeave");
+  var speakerBtn = document.getElementById("callSpeaker");
   var callAudio = document.getElementById("callAudio");
+
+  // ---- Speaker / hands-free (default ON) ----
+  var speakerOn = true;
+  try { speakerOn = localStorage.getItem("callSpeakerOn") !== "0"; } catch (e) {}
+
+  function speakerSinkId() {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) return Promise.resolve("");
+    return navigator.mediaDevices.enumerateDevices().then(function (list) {
+      var outs = [];
+      for (var i = 0; i < (list || []).length; i++) {
+        if (list[i].kind === "audiooutput") outs.push(list[i]);
+      }
+      if (!outs.length) return "";
+      var sp = null;
+      for (var j = 0; j < outs.length; j++) {
+        if (/speaker|speakerphone|loudspeaker|built-in|bt_|headset/i.test(outs[j].label || "")) { sp = outs[j]; break; }
+      }
+      return ((sp || outs[0]).deviceId) || "";
+    }).catch(function () { return ""; });
+  }
+
+  function applySpeaker() {
+    if (!callAudio) return Promise.resolve(false);
+    var els = callAudio.querySelectorAll("audio");
+    if (!els.length) return Promise.resolve(false);
+    var canSet = false;
+    for (var i = 0; i < els.length; i++) {
+      if (typeof els[i].setSinkId === "function") { canSet = true; break; }
+    }
+    if (!canSet) return Promise.resolve(false);
+    return speakerSinkId().then(function (id) {
+      if (!id) return false;
+      var jobs = [];
+      for (var k = 0; k < els.length; k++) {
+        (function (a) {
+          if (typeof a.setSinkId !== "function") return;
+          var pr = a.setSinkId(id);
+          if (pr && pr.then) pr.then(function () {}).catch(function () {});
+        })(els[k]);
+      }
+      return jobs.length > 0 || true;
+    }).catch(function () { return false; });
+  }
+
+  function setSpeaker(on, announce) {
+    speakerOn = !!on;
+    try { localStorage.setItem("callSpeakerOn", speakerOn ? "1" : "0"); } catch (e) {}
+    if (speakerBtn) {
+      speakerBtn.classList.toggle("call-speaker-on", speakerOn);
+      speakerBtn.title = speakerOn ? "Speaker on (hands-free)" : "Speaker off";
+    }
+    if (!announce) return;
+    applySpeaker().then(function (ok) {
+      if (ok) {
+        chatToast(speakerOn ? "Speaker on — hands-free." : "Speaker off.", "ok");
+      } else {
+        chatToast(speakerOn
+          ? "Browser ne speaker control nahi diya — phone ka speaker button dabao."
+          : "Speaker off (device pe manually band karo).", "");
+      }
+    });
+  }
+
+  if (speakerBtn) {
+    setSpeaker(speakerOn, false);
+    speakerBtn.addEventListener("click", function () { setSpeaker(!speakerOn, true); });
+  }
 
   var call = {
     active: false,
     stream: null,
     since: "",
     pcs: {}, // peerId -> {pc, name, ice:[]}
+    names: {},
     timer: null,
     micOn: true
   };
 
-  var iceServers = { iceServers: [{ urls: "stun:stun.l.google.com:19302" }] };
+  var iceServers = {
+    iceServers: [
+      { urls: "stun:stun.l.google.com:19302" },
+      { urls: "stun:stun1.l.google.com:19302" },
+      { urls: "turn:openrelay.metered.ca:80", username: "openrelayproject", credential: "openrelayproject" },
+      { urls: "turn:openrelay.metered.ca:443", username: "openrelayproject", credential: "openrelayproject" },
+      { urls: "turn:openrelay.metered.ca:443?transport=tcp", username: "openrelayproject", credential: "openrelayproject" }
+    ]
+  };
 
   function callChip(name) {
     var c = document.createElement("span");
@@ -381,10 +511,32 @@ function notify(m) {
     pc.ontrack = function (ev) {
       try {
         var audio = document.createElement("audio");
-        audio.setAttribute("autoplay", "");
-        audio.srcObject = ev.streams[0];
-        callAudio.appendChild(audio);
+        audio.autoplay = true;
+        audio.setAttribute("playsinline", "");
+        audio.setAttribute("data-peer", uid);
+        audio.srcObject = ev.streams && ev.streams[0];
+        audio.volume = 1;
+        if (callAudio) callAudio.appendChild(audio);
+        if (speakerOn) applySpeaker();
+        var pr = audio.play();
+        if (pr && pr.catch) {
+          pr.catch(function () {
+            var retry = function () {
+              var q = audio.play();
+              if (q && q.catch) q.catch(function () {});
+              document.removeEventListener("click", retry);
+              document.removeEventListener("touchstart", retry);
+            };
+            document.addEventListener("click", retry);
+            document.addEventListener("touchstart", retry);
+          });
+        }
       } catch (e) {}
+    };
+    pc.onconnectionstatechange = function () {
+      if (pc.connectionState === "connected") {
+        chatToast("Call connected.", "ok");
+      }
     };
     pc.onconnectionstatechange = function () {
       if (pc.connectionState === "failed" || pc.connectionState === "disconnected") {
@@ -406,7 +558,7 @@ function notify(m) {
     try { entry.pc.close(); } catch (e) {}
     delete call.pcs[uid];
     if (callAudio) {
-      callAudio.querySelectorAll("audio").forEach(function (a) { a.remove(); });
+      callAudio.querySelectorAll('audio[data-peer="' + uid + '"]').forEach(function (a) { a.remove(); });
     }
     updateCallUI();
   }
@@ -493,7 +645,9 @@ function notify(m) {
       chatToast("Is browser me voice call support nahi hai.", "");
       return;
     }
-    navigator.mediaDevices.getUserMedia({ audio: true }).then(function (stream) {
+    navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
+    }).then(function (stream) {
       call.stream = stream;
       call.active = true;
       call.names = {};
@@ -515,6 +669,13 @@ function notify(m) {
       }).catch(function () {});
       call.timer = setInterval(callPoll, 1200);
       chatToast("Voice call join ho gayi.", "ok");
+      if (speakerOn) {
+        setTimeout(function () {
+          applySpeaker().then(function (ok) {
+            if (!ok) chatToast("Speaker ke liye phone ka speaker button dabao.", "");
+          });
+        }, 800);
+      }
     }).catch(function () {
       chatToast("Mic permission nahi mili.", "");
     });
