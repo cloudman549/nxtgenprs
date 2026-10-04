@@ -22,6 +22,11 @@
   var dateFilter = document.getElementById("dateFilter");
   var toastWrap = document.getElementById("toastWrap");
 
+  // Safety checks: prevent classList errors if elements don't exist
+  if (!pdfList) {
+    console.warn("pdfList element not found - dashboard features disabled");
+  }
+
   var accessUserInput = document.getElementById("accessUserInput");
   var accessPassInput = document.getElementById("accessPassInput");
   var pendingFiles = [];
@@ -101,6 +106,7 @@
   }
 
   function renderList(items) {
+    if (!pdfList) return; // Safety check
     pdfList.innerHTML = "";
     if (!items.length) {
       var empty = document.createElement("div");
@@ -209,6 +215,7 @@
   }
 
   function renderLoginPrompt() {
+    if (!pdfList) return; // Safety check
     pdfList.innerHTML = "";
     var empty = document.createElement("div");
     empty.className = "empty";
@@ -277,8 +284,11 @@
   }
 
   function loadPdfs() {
-    emptyState.classList.remove("hidden");
-    emptyState.textContent = "Loading...";
+    if (!pdfList) return; // Skip if not on dashboard page
+    if (emptyState) {
+      emptyState.classList.remove("hidden");
+      emptyState.textContent = "Loading...";
+    }
     fetch("/api/pdfs", { headers: { "X-CSRF-Token": csrf } })
       .then(function (r) {
         if (r.status === 401 && !isLoggedIn) {
@@ -288,17 +298,22 @@
         return r.json();
       })
       .then(function (data) {
-        emptyState.classList.add("hidden");
+        if (emptyState) emptyState.classList.add("hidden");
         if (data.success) {
           allPdfs = data.pdfs || [];
           renderFiltered();
         }
-        else { emptyState.classList.remove("hidden"); emptyState.textContent = "List load nahi ho saki."; }
+        else if (emptyState) {
+          emptyState.classList.remove("hidden");
+          emptyState.textContent = "List load nahi ho saki.";
+        }
       })
       .catch(function (err) {
         if (err && err.message === "login-required") return;
-        emptyState.classList.remove("hidden");
-        emptyState.textContent = "Network error. Refresh karein.";
+        if (emptyState) {
+          emptyState.classList.remove("hidden");
+          emptyState.textContent = "Network error. Refresh karein.";
+        }
       });
   }
 
