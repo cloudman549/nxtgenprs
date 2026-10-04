@@ -2686,7 +2686,7 @@ def api_export_orders_pdf(user):
     return send_file(buf, mimetype="application/pdf", download_name=fname, as_attachment=True, max_age=0)
 
 
-# ---------------------------------------------------------------- Chat (login ke baad)
+# ---------------------------------------------------------------- Chat (login ke baad)# ---------------------------------------------------------------- Chat (login ke baad)
 _CHAT_IMAGE_TYPES = {
     "png": "image/png",
     "jpg": "image/jpeg",
