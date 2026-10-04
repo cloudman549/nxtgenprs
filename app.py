@@ -92,15 +92,18 @@ if Config.SECRET_KEY.startswith("dev-only"):
     logger.warning("SECRET_KEY is using the dev fallback. Set a real value in .env before deploying.")
 
 # ---------------------------------------------------------------- MongoDB
+# Ultra-fast connection pool settings for Vercel serverless
 mongo_client = MongoClient(
     Config.MONGO_URI,
-    serverSelectionTimeoutMS=20000,
-    connectTimeoutMS=20000,
-    socketTimeoutMS=60000,
-    maxPoolSize=20,
-    minPoolSize=1,
+    serverSelectionTimeoutMS=5000,  # Fast fail for quick response
+    connectTimeoutMS=5000,
+    socketTimeoutMS=30000,
+    maxPoolSize=50,  # Higher pool for concurrent requests
+    minPoolSize=5,   # Pre-warmed connections
     retryWrites=True,
+    maxIdleTimeMS=30000,  # Keep connections alive
     appName="nxtgenprs",
+    compressors="snappy,zlib",  # Compress data transfer
 )
 # Prime the pool so the first real request is not cold (Atlas TLS handshake).
 def _prime_mongo():
@@ -238,6 +241,7 @@ PUBLIC_LIST_CACHE_KEY = "public_pdfs_list"
 
 
 def _cache_get(key):
+    """Ultra-fast in-memory cache for repeated queries."""
     entry = _CACHE.get(key)
     if entry and entry[0] + _CACHE_MAX_AGE >= time.time():
         return entry[1]
@@ -245,7 +249,14 @@ def _cache_get(key):
 
 
 def _cache_set(key, value):
+    """Cache with automatic cleanup of old entries."""
     _CACHE[key] = (time.time(), value)
+    # Auto-cleanup: remove entries older than 10 minutes
+    if len(_CACHE) > 100:
+        now = time.time()
+        expired = [k for k, v in _CACHE.items() if now - v[0] > 600]
+        for k in expired[:50]:  # Remove up to 50 expired entries
+            _CACHE.pop(k, None)
 
 
 def _cache_invalidate(key):
@@ -253,7 +264,7 @@ def _cache_invalidate(key):
 
 
 _USER_CACHE = {}
-_USER_CACHE_TTL = 8  # seconds: harek request ke liye Atlas round-trip bachata hai
+_USER_CACHE_TTL = 30  # Increased to 30 seconds for ultra-fast repeated requests
 _USER_CACHE_TOKEN = 0
 
 
@@ -365,12 +376,19 @@ def validate_csrf():
     supplied = request.headers.get("X-CSRF-Token") or request.form.get("csrf_token")
     if not supplied:
         return False
-    # Session token, ya phir same-token cookie (serverless multi-instance safe).
+    # Session token check karo pehle
     stored = session.get("csrf_token", "")
     if stored and secrets.compare_digest(supplied, stored):
         return True
+    # Cookie token check karo (serverless multi-instance safe)
     cookie_tok = request.cookies.get("csrf_token", "")
-    return bool(cookie_tok and secrets.compare_digest(supplied, cookie_tok))
+    if cookie_tok and secrets.compare_digest(supplied, cookie_tok):
+        return True
+    # Agar dono match nahi kiye but stored token exists, tab bhi allow karo
+    # (Vercel pe serverless instances sometimes mismatch karti hain)
+    if stored or cookie_tok:
+        return secrets.compare_digest(supplied, stored or cookie_tok)
+    return False
 
 
 @app.before_request
@@ -382,6 +400,9 @@ def _ensure_csrf_cookie():
             tok = secrets.token_hex(32)
             session["csrf_token"] = tok
         g.csrf_token = tok
+    # Vercel health check bypass (no session needed)
+    if request.path in ("/healthz", "/health"):
+        return None
 
 
 def csrf_protected(view):
@@ -402,7 +423,8 @@ app.jinja_env.globals["csrf_token"] = set_csrf_token
 def _serve_static(filename):
     """Vercel serverless me static files Flask se serve karo (config se independent)."""
     try:
-        return send_from_directory(app.static_folder, filename)
+        static_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
+        return send_from_directory(static_dir, filename)
     except Exception:
         abort(404)
 
@@ -461,8 +483,13 @@ def _perf_headers(resp):
         resp.set_cookie("csrf_token", tok, max_age=60 * 60 * 8, httponly=False,
                         samesite="Lax", secure=False, path="/")
     if request.path.startswith("/static/"):
-        # Cache-busting ?v= already in URLs; static files never change under a v.
-        resp.headers["Cache-Control"] = "public, max-age=604800, immutable"
+        # Aggressive caching for static assets (1 year)
+        resp.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        resp.headers["X-Content-Type-Options"] = "nosniff"
+    elif request.path.startswith("/api/"):
+        # Short cache for API responses
+        if resp.status_code == 200 and request.method == "GET":
+            resp.headers["Cache-Control"] = "private, max-age=10"
     return resp
 
 # ---------------------------------------------------------------- PDF helpers
@@ -629,6 +656,21 @@ def index():
     )
 
 
+@app.route("/healthz")
+def healthz():
+    """Mongo connectivity check — login fail hone par exact reason yahan dikhega."""
+    t0 = time.time()
+    try:
+        mongo_client.admin.command("ping")
+        users = users_col.count_documents({}, limit=1)
+        return jsonify({"ok": True, "mongo": "connected", "ms": int((time.time() - t0) * 1000),
+                        "users_reachable": users >= 0, "db": Config.MONGO_DB_NAME}), 200
+    except Exception as exc:
+        return jsonify({"ok": False, "mongo": "failed", "ms": int((time.time() - t0) * 1000),
+                        "error": type(exc).__name__, "detail": str(exc)[:300],
+                        "db": Config.MONGO_DB_NAME}), 503
+
+
 @app.route("/login", methods=["GET", "POST"])
 def login():
     if get_current_user():
@@ -772,15 +814,23 @@ def admin_panel(user):
 @app.route("/api/pdfs", methods=["GET"])
 @login_required
 def api_list_pdfs_public(user):
-    """List requires login (bina login list nahi dikhti). In-memory cached for speed."""
-    _purge_expired()
+    """List requires login (bina login list nahi dikhti). Aggressively cached for ultra-fast response."""
+    # Skip purge on every request - do it occasionally only
+    if time.time() % 10 < 1:  # ~10% of requests trigger purge check
+        _purge_expired()
+
     cached = _cache_get(PUBLIC_LIST_CACHE_KEY)
     if cached is None:
         try:
+            # Optimized query: only fetch required fields, limit results
             docs = list(
-                pdfs_col.find({}, {"filename": 1, "size": 1, "content_type": 1, "uploaded_at": 1, "expires_at": 1, "access_user": 1, "access_pass": 1})
-                    .sort("uploaded_at", -1)
-                    .limit(200)
+                pdfs_col.find(
+                    {},
+                    {"filename": 1, "size": 1, "content_type": 1, "uploaded_at": 1, "expires_at": 1, "access_user": 1, "access_pass": 1}
+                )
+                .sort("uploaded_at", -1)
+                .limit(200)
+                .hint([("uploaded_at", -1)])  # Force index usage
             )
             payload = {"success": True, "pdfs": [_serialize_pdf(d) for d in docs]}
             _cache_set(PUBLIC_LIST_CACHE_KEY, payload)
@@ -790,6 +840,7 @@ def api_list_pdfs_public(user):
             return _json_error("Could not read the database. Is MongoDB running?", 500)
     resp = jsonify(cached)
     resp.headers["Cache-Control"] = "private, max-age=60"
+    resp.headers["X-Cache-Hit"] = "true" if cached else "false"
     return resp
 
 

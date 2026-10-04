@@ -10,21 +10,18 @@
       "src": "api/index.py",
       "use": "@vercel/python",
       "config": {
-        "maxLambdaSize": "300mb",
-        "includeFiles": [
-          "static/**",
-          "templates/**",
-          "data/**"
-        ],
-        "excludeFiles": [
-          "venv/**",
-          "**/__pycache__/**",
-          ".git/**"
-        ]
+        "maxLambdaSize": "300mb"
       }
     }
   ],
   "routes": [
-    { "src": "/(.*)", "dest": "/api/index.py" }
+    {
+      "src": "/static/(.*)",
+      "dest": "/static/$1"
+    },
+    {
+      "src": "/(.*)",
+      "dest": "/api/index.py"
+    }
   ]
 }
