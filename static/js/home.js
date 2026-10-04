@@ -1,11 +1,19 @@
 (function () {
   "use strict";
 
-  var csrf = document.querySelector('meta[name="csrf-token"]').getAttribute("content");
-  var maxSizeMb = parseInt(document.getElementById("maxSizeMb").value, 10) || 50;
-  var isLoggedIn = document.getElementById("isLoggedIn");
-  if (isLoggedIn) isLoggedIn = isLoggedIn.value === "1";
-  else isLoggedIn = !!document.getElementById("pdfList");
+  // Early safety check for CSRF token
+  var csrfMeta = document.querySelector('meta[name="csrf-token"]');
+  if (!csrfMeta) {
+    console.error("CSRF token meta tag not found");
+    return;
+  }
+  var csrf = csrfMeta.getAttribute("content");
+
+  var maxSizeMbEl = document.getElementById("maxSizeMb");
+  var maxSizeMb = maxSizeMbEl ? parseInt(maxSizeMbEl.value, 10) : 50;
+
+  var isLoggedInEl = document.getElementById("isLoggedIn");
+  var isLoggedIn = isLoggedInEl ? isLoggedInEl.value === "1" : !!document.getElementById("pdfList");
 
   var dropZone = document.getElementById("dropZone");
   var fileInput = document.getElementById("fileInput");
@@ -21,11 +29,6 @@
   var searchInput = document.getElementById("searchInput");
   var dateFilter = document.getElementById("dateFilter");
   var toastWrap = document.getElementById("toastWrap");
-
-  // Safety checks: prevent classList errors if elements don't exist
-  if (!pdfList) {
-    console.warn("pdfList element not found - dashboard features disabled");
-  }
 
   var accessUserInput = document.getElementById("accessUserInput");
   var accessPassInput = document.getElementById("accessPassInput");
@@ -437,8 +440,10 @@
   }
 
   // ---- Events ----
-  pickBtn.addEventListener("click", function () { fileInput.click(); });
-  fileInput.addEventListener("change", function () { handleFiles(fileInput.files); fileInput.value = ""; });
+  if (pickBtn && fileInput) {
+    pickBtn.addEventListener("click", function () { fileInput.click(); });
+    fileInput.addEventListener("change", function () { handleFiles(fileInput.files); fileInput.value = ""; });
+  }
   if (refreshBtn) refreshBtn.addEventListener("click", loadPdfs);
   if (uploadBtn) uploadBtn.addEventListener("click", startUpload);
 
@@ -449,35 +454,39 @@
     dateFilter.addEventListener("change", renderFiltered);
   }
 
-  dropZone.addEventListener("click", function (e) {
-    if (e.target === dropZone || e.target.closest(".dropzone-inner")) fileInput.click();
-  });
-
-  ["dragenter", "dragover"].forEach(function (ev) {
-    dropZone.addEventListener(ev, function (e) {
-      e.preventDefault();
-      e.stopPropagation();
-      dropZone.classList.add("drag-over");
+  if (dropZone && fileInput) {
+    dropZone.addEventListener("click", function (e) {
+      if (e.target === dropZone || e.target.closest(".dropzone-inner")) fileInput.click();
     });
-  });
-  ["dragleave", "drop"].forEach(function (ev) {
-    dropZone.addEventListener(ev, function (e) {
-      e.preventDefault();
-      e.stopPropagation();
-      dropZone.classList.remove("drag-over");
-    });
-  });
-  dropZone.addEventListener("drop", function (e) {
-    handleFiles(e.dataTransfer.files);
-  });
 
-  document.addEventListener("keydown", function (e) {
-    if ((e.key === "d" || e.key === "D") && !e.ctrlKey && !e.metaKey && !e.shiftKey) {
-      var target = e.target;
-      if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) return;
-      fileInput.click();
-    }
-  });
+    ["dragenter", "dragover"].forEach(function (ev) {
+      dropZone.addEventListener(ev, function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        dropZone.classList.add("drag-over");
+      });
+    });
+    ["dragleave", "drop"].forEach(function (ev) {
+      dropZone.addEventListener(ev, function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        dropZone.classList.remove("drag-over");
+      });
+    });
+    dropZone.addEventListener("drop", function (e) {
+      handleFiles(e.dataTransfer.files);
+    });
+  }
+
+  if (fileInput) {
+    document.addEventListener("keydown", function (e) {
+      if ((e.key === "d" || e.key === "D") && !e.ctrlKey && !e.metaKey && !e.shiftKey) {
+        var target = e.target;
+        if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) return;
+        fileInput.click();
+      }
+    });
+  }
 
   // ---------------- Dashboard tabs ----------------
   var dashTabs = document.querySelectorAll(".dash-tab[data-tab]");

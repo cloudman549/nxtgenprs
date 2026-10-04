@@ -87,6 +87,8 @@ app.config["MAX_CONTENT_LENGTH"] = Config.MAX_PDF_SIZE_MB * 1024 * 1024
 app.config["SESSION_COOKIE_HTTPONLY"] = Config.SESSION_COOKIE_HTTPONLY
 app.config["SESSION_COOKIE_SAMESITE"] = Config.SESSION_COOKIE_SAMESITE
 app.config["SESSION_COOKIE_SECURE"] = Config.SESSION_COOKIE_SECURE
+app.config["TEMPLATES_AUTO_RELOAD"] = True
+app.jinja_env.auto_reload = True
 
 if Config.SECRET_KEY.startswith("dev-only"):
     logger.warning("SECRET_KEY is using the dev fallback. Set a real value in .env before deploying.")

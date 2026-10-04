@@ -12,6 +12,12 @@
   var customDate = document.getElementById("customDate");
   var toastWrap = document.getElementById("toastWrap");
 
+  // Safety checks for null elements
+  if (!pdfList || !emptyState || !dateFilter || !toastWrap) {
+    console.error("Required dashboard elements missing");
+    return; // Exit early if critical elements are missing
+  }
+
   var allPdfs = [];
 
   function toast(msg, type) {
@@ -66,11 +72,12 @@
   };
 
   function renderList(items) {
+    if (!pdfList) return; // Safety check
     pdfList.innerHTML = "";
     if (!items.length) {
       var empty = document.createElement("div");
       empty.className = "empty";
-      if (allPdfs.length && dateFilter.value === "today") {
+      if (allPdfs.length && dateFilter && dateFilter.value === "today") {
         empty.textContent = "Aaj (today) koi PDF upload nahi hui. 'All Days' chun kar pura list dekhein.";
       } else if (allPdfs.length && dateFilter.value === "custom" && customDate && customDate.value) {
         empty.textContent = "Is date pe koi PDF upload nahi hui. 'All Days' chunein.";
