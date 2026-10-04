@@ -537,8 +537,8 @@
 
   function journeyMatch(t, jd) {
     var td = String(t.date || "").trim();
-    if (td === jd) return true;
-    return t.starred && td === nextDayIso(jd);
+    if (t.starred) return td === nextDayIso(jd);
+    return td === jd;
   }
 
   function orderFilterPass(t) {
