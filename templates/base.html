@@ -11,7 +11,7 @@
   <style>
     body { font-family: 'Plus Jakarta Sans', system-ui, -apple-system, 'Segoe UI', Roboto, Arial, sans-serif; }
   </style>
-  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}?v=66">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}?v=67">
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="icon" href="{{ url_for('static', filename='nxtgen.png') }}">
   <link rel="apple-touch-icon" sizes="180x180" href="{{ url_for('static', filename='apple-touch-icon.png') }}">
@@ -29,7 +29,7 @@
     })();
   </script>
 </head>
-<body>
+<body class="{% block bodyclass %}{% endblock %}">
   <header class="topbar">
     <div class="topbar-inner">
       <div class="topbar-brand-row">

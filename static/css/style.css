@@ -646,6 +646,71 @@ body::-webkit-scrollbar-thumb {
 .order-detail-inner::-webkit-scrollbar-thumb:hover,
 body::-webkit-scrollbar-thumb:hover { background: rgba(100, 116, 139, 0.75); background-clip: content-box; }
 
+/* ---------------- Scroll lists: rows must NEVER compress ----------------
+   .order-list / .pdf-list / .user-list are flex columns. Without
+   flex-shrink:0 the children squash into unreadable 1px lines the moment
+   a max-height is applied. Keep every child at its natural height. */
+.order-list > *,
+.pdf-list > *,
+.user-list > * { flex: 0 0 auto; }
+
+.emp-cards > * { flex: 0 0 auto; }
+
+/* ---------------- Dashboard: page must not scroll, only the list ------- */
+body.dash-body {
+  height: 100vh;
+  height: 100dvh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+body.dash-body .topbar { flex: none; position: static; }
+body.dash-body .footer { display: none; }
+body.dash-body .container {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding-bottom: 18px;
+}
+body.dash-body .dash-tabs { flex: none; }
+body.dash-body .files-section {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  margin-top: 0;
+}
+body.dash-body .files-section.hidden { display: none; }
+body.dash-body .card {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 18px;
+}
+body.dash-body .grid {
+  flex: 1 1 auto;
+  min-height: 0;
+  grid-auto-rows: minmax(0, 1fr);
+  overflow: hidden;
+}
+body.dash-body .grid > .card { min-height: 0; overflow: hidden; }
+body.dash-body .list-head,
+body.dash-body .order-summary,
+body.dash-body .order-toolbar,
+body.dash-body .fw-sel-bar { flex: none; }
+body.dash-body .pdf-list,
+body.dash-body .user-list,
+body.dash-body .order-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
 /* ---------- Toasts ---------- */
 .toast-wrap {
   position: fixed;

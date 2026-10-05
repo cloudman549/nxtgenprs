@@ -2548,10 +2548,12 @@ def _build_orders_pdf(docs, label=""):
         tname = str(d.get("t_name") or "").strip() or "TICKET"
         star_pre = "<font color='#fbbf24'>&#9733; </font>" if d.get("starred") else ""
         star_ch = "\u2605 " if d.get("starred") else ""
+        cls_txt = str(d.get("cls") or "").strip()
+        cls_w = (min(23.0, col_w - 12.0) + 6.0) if cls_txt else 0
         avail_w = col_w - 10
         name_avail = avail_w - _pdfmetrics.stringWidth(star_ch, _FONT_BOLD, 8.5) \
                      - _pdfmetrics.stringWidth(f"CARD-{num}  ", _FONT_BOLD, 8.5) \
-                     - _pdfmetrics.stringWidth("...", _FONT_BOLD, 8.5)
+                     - _pdfmetrics.stringWidth("...", _FONT_BOLD, 8.5) - cls_w
         if _pdfmetrics.stringWidth(tname, _FONT_BOLD, 8.5) > name_avail:
             short = tname
             while short and len(short) > 1 and _pdfmetrics.stringWidth(short + "...", _FONT_BOLD, 8.5) > name_avail + \
@@ -2561,7 +2563,8 @@ def _build_orders_pdf(docs, label=""):
 
         hdr_st = ParagraphStyle("hF", fontName=_FONT_BOLD, fontSize=8.5, leading=10.5,
                                 textColor=colors.white)
-        hdr_line1 = Paragraph(f"{star_pre}CARD-{num}&nbsp;&nbsp;{_pdf_esc(tname)}", hdr_st)
+        cls_html = ""
+        hdr_line1 = Paragraph(f"{star_pre}CARD-{num}&nbsp;&nbsp;{_pdf_esc(tname)}{cls_html}", hdr_st)
         mob_style = ParagraphStyle("hM", fontName=_FONT_NORMAL, fontSize=7, leading=8.5,
                                    textColor=colors.HexColor("#f1f5f9"))
         hdr_line2 = Paragraph(f"mob: {_pdf_esc(mob)}", mob_style)
@@ -2589,18 +2592,48 @@ def _build_orders_pdf(docs, label=""):
             rows.append([Paragraph(booked_line, cS)])
         if desc:
             rows.append([Paragraph(f"Desc: <font color='#64748b'>{_pdf_esc(desc)}</font>", fS)])
-        t = Table(rows, colWidths=[col_w])
-        t.setStyle(TableStyle([
-            ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#ffffff")),
-            ("BACKGROUND", (0, 0), (-1, 0), hd_bg),
-            ("LINEBELOW", (0, 0), (-1, 0), 1.4, colors.HexColor("#fbbf24")),
-            ("LEFTPADDING", (0, 0), (-1, -1), 5),
-            ("RIGHTPADDING", (0, 0), (-1, -1), 5),
-            ("TOPPADDING", (0, 0), (-1, -1), 2),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
-        ]))
+        def _mk_table(rws):
+            tt = Table(rws, colWidths=[col_w])
+            tt.setStyle(TableStyle([
+                ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#ffffff")),
+                ("BACKGROUND", (0, 0), (-1, 0), hd_bg),
+                ("LINEBELOW", (0, 0), (-1, 0), 1.4, colors.HexColor("#fbbf24")),
+                ("LEFTPADDING", (0, 0), (-1, -1), 5),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+                ("TOPPADDING", (0, 0), (-1, -1), 2),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+            ]))
+            tt.hAlign = "LEFT"
+            return tt
+
+        t = _mk_table(rows)
         t.hAlign = "LEFT"
-        return t
+        try:
+            hdr_h = hdrbox.wrap(col_w, card_h)[1]
+        except Exception:
+            hdr_h = 23.0
+        try:
+            ch = t.wrap(col_w, 10 ** 9)[1]
+        except Exception:
+            ch = card_h
+        try:
+            row_h = list(t._rowHeights)
+        except Exception:
+            row_h = []
+        for _pass in range(3):
+            if ch >= card_h - 0.3:
+                break
+            slack = card_h - ch - 4.0
+            if slack <= 0.5:
+                break
+            rows.append([Spacer(1, slack)])
+            t = _mk_table(rows)
+            try:
+                ch = t.wrap(col_w, 10 ** 9)[1]
+            except Exception:
+                ch = card_h
+                break
+        return t, cls_txt, hdr_h, ch
 
     docs_sorted = sorted(docs, key=lambda d: (
         str(d.get("date") or "").strip(),
@@ -2630,7 +2663,7 @@ def _build_orders_pdf(docs, label=""):
                           f"Page {page_no} of {total_pages}")
         c.restoreState()
 
-    def _draw_card(t, col, row, num):
+    def _draw_card(t, col, row, num, cls_txt="", hdr_h=23.0, ch=None):
         x = left_m + col * (col_w + gap)
         y_top = page_h - top_m - row * (card_h + gap)
         y_bot = y_top - card_h
@@ -2639,27 +2672,48 @@ def _build_orders_pdf(docs, label=""):
         c.setStrokeColor(colors.HexColor("#cbd5e1"))
         c.setLineWidth(1)
         c.rect(x, y_bot, col_w, card_h, stroke=1, fill=1)
-        try:
-            ch = t.wrap(col_w, 10 ** 9)[1]
-        except Exception:
-            ch = card_h
+        if ch is None:
+            try:
+                ch = t.wrap(col_w, 10 ** 9)[1]
+            except Exception:
+                ch = card_h
+        scale = 1.0
         if ch > card_h:
-            f = card_h / ch
+            scale = card_h / ch
             c.translate(x, y_bot)
-            c.scale(f, f)
+            c.scale(scale, scale)
             t.drawOn(c, 0, 0)
         else:
             t.drawOn(c, x, y_top - ch)
         c.restoreState()
+
+        if cls_txt:
+            band_h = hdr_h * scale
+            dia = min(band_h - 2.0, col_w - 12.0)
+            if dia > 6:
+                cx = x + col_w - 5.0 - dia / 2.0
+                cy = y_top - 2.0 - band_h / 2.0
+                c.saveState()
+                c.setFillColor(colors.HexColor("#dc2626"))
+                c.setStrokeColor(colors.HexColor("#ffffff"))
+                c.setLineWidth(0.8)
+                c.circle(cx, cy, dia / 2.0, stroke=1, fill=1)
+                fs = dia * 0.6
+                while fs > 3.0 and _pdfmetrics.stringWidth(cls_txt, _FONT_BOLD, fs) > dia * 1.1:
+                    fs -= 0.3
+                c.setFillColor(colors.white)
+                c.setFont(_FONT_BOLD, fs)
+                c.drawCentredString(cx, cy - fs * 0.35, cls_txt)
+                c.restoreState()
 
     page_no = 1
     for start in range(0, n, grid_x * grid_y):
         page_docs = docs_sorted[start:start + grid_x * grid_y]
         _draw_header(page_no)
         for idx, doc in enumerate(page_docs):
-            t = _card(doc, start + idx + 1)
+            t, cls_txt, hdr_h, ch = _card(doc, start + idx + 1)
             row_i, col_i = divmod(idx, grid_x)
-            _draw_card(t, col_i, row_i, start + idx + 1)
+            _draw_card(t, col_i, row_i, start + idx + 1, cls_txt, hdr_h, ch)
         page_no += 1
         c.showPage()
     c.save()
