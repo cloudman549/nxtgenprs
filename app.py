@@ -45,22 +45,30 @@ try:
     from reportlab.pdfbase.ttfonts import TTFont as _TTFont
 
     _fonts_dir = os.path.join(os.environ.get("WINDIR", r"C:\Windows"), "Fonts")
+    _bundled_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "fonts")
     _family = None
     for _fam, _n, _b, _i, _bi in (
+        ("BarlowCond", "BarlowCondensed-Regular.ttf", "BarlowCondensed-Bold.ttf",
+         "BarlowCondensed-Italic.ttf", "BarlowCondensed-BoldItalic.ttf"),
+        ("BarlowCond", "BarlowCondensed-Regular.ttf", "BarlowCondensed-SemiBold.ttf",
+         "BarlowCondensed-Italic.ttf", "BarlowCondensed-SemiBold.ttf"),
         ("Verdana", "VERDANA.TTF", "VERDANAB.TTF", "VERDANAI.TTF", "VERDANAZ.TTF"),
         ("Segoe UI", "segoeui.ttf", "segoeuib.ttf", "segoeuii.ttf", "segoeuiz.ttf"),
     ):
-        try:
-            _pdfmetrics.registerFont(_TTFont(_fam, os.path.join(_fonts_dir, _n)))
-            _pdfmetrics.registerFont(_TTFont(_fam + "-Bold", os.path.join(_fonts_dir, _b)))
-            _pdfmetrics.registerFont(_TTFont(_fam + "-Italic", os.path.join(_fonts_dir, _i)))
-            _pdfmetrics.registerFont(_TTFont(_fam + "-BoldItalic", os.path.join(_fonts_dir, _bi)))
-            _pdfmetrics.registerFontFamily(_fam, normal=_fam, bold=_fam + "-Bold",
-                                           italic=_fam + "-Italic", boldItalic=_fam + "-BoldItalic")
-            _family = _fam
+        for _dir in (_bundled_dir, _fonts_dir):
+            try:
+                _pdfmetrics.registerFont(_TTFont(_fam, os.path.join(_dir, _n)))
+                _pdfmetrics.registerFont(_TTFont(_fam + "-Bold", os.path.join(_dir, _b)))
+                _pdfmetrics.registerFont(_TTFont(_fam + "-Italic", os.path.join(_dir, _i)))
+                _pdfmetrics.registerFont(_TTFont(_fam + "-BoldItalic", os.path.join(_dir, _bi)))
+                _pdfmetrics.registerFontFamily(_fam, normal=_fam, bold=_fam + "-Bold",
+                                               italic=_fam + "-Italic", boldItalic=_fam + "-BoldItalic")
+                _family = _fam
+                break
+            except Exception:
+                _family = None
+        if _family:
             break
-        except Exception:
-            _family = None
     if _family:
         _FONT_NORMAL = _family
         _FONT_BOLD = _family + "-Bold"
@@ -2546,25 +2554,26 @@ def _build_orders_pdf(docs, label=""):
         paxbox.hAlign = "LEFT"
 
         tname = str(d.get("t_name") or "").strip() or "TICKET"
+        title_txt = tname.replace("-", " to ", 1)
         star_pre = "<font color='#fbbf24'>&#9733; </font>" if d.get("starred") else ""
         star_ch = "\u2605 " if d.get("starred") else ""
         cls_txt = str(d.get("cls") or "").strip()
         cls_w = (min(23.0, col_w - 12.0) + 6.0) if cls_txt else 0
         avail_w = col_w - 10
         name_avail = avail_w - _pdfmetrics.stringWidth(star_ch, _FONT_BOLD, 8.5) \
-                     - _pdfmetrics.stringWidth(f"CARD-{num}  ", _FONT_BOLD, 8.5) \
+                     - _pdfmetrics.stringWidth(f"C-{num}  ", _FONT_BOLD, 8.5) \
                      - _pdfmetrics.stringWidth("...", _FONT_BOLD, 8.5) - cls_w
-        if _pdfmetrics.stringWidth(tname, _FONT_BOLD, 8.5) > name_avail:
-            short = tname
+        if _pdfmetrics.stringWidth(title_txt, _FONT_BOLD, 8.5) > name_avail:
+            short = title_txt
             while short and len(short) > 1 and _pdfmetrics.stringWidth(short + "...", _FONT_BOLD, 8.5) > name_avail + \
                     _pdfmetrics.stringWidth("...", _FONT_BOLD, 8.5):
                 short = short[:-1]
-            tname = short.rstrip() + "..." if short else "..."
+            title_txt = short.rstrip() + "..." if short else "..."
 
         hdr_st = ParagraphStyle("hF", fontName=_FONT_BOLD, fontSize=8.5, leading=10.5,
-                                textColor=colors.white)
+                                textColor=colors.HexColor("#fbbf24"))
         cls_html = ""
-        hdr_line1 = Paragraph(f"{star_pre}CARD-{num}&nbsp;&nbsp;{_pdf_esc(tname)}{cls_html}", hdr_st)
+        hdr_line1 = Paragraph(f"{star_pre}C-{num}&nbsp;&nbsp;{_pdf_esc(title_txt)}{cls_html}", hdr_st)
         mob_style = ParagraphStyle("hM", fontName=_FONT_NORMAL, fontSize=7, leading=8.5,
                                    textColor=colors.HexColor("#f1f5f9"))
         hdr_line2 = Paragraph(f"mob: {_pdf_esc(mob)}", mob_style)

@@ -1,9 +1,25 @@
 {
-  "functions": {
-    "api/index.py": {
-      "maxDuration": 60
+  "version": 2,
+  "builds": [
+    {
+      "src": "api/index.py",
+      "use": "@vercel/python",
+      "config": {
+        "maxLambdaSize": "300mb",
+        "maxDuration": 60,
+        "includeFiles": [
+          "static/**",
+          "templates/**",
+          "data/**"
+        ],
+        "excludeFiles": [
+          "venv/**",
+          "**/__pycache__/**",
+          ".git/**"
+        ]
+      }
     }
-  },
+  ],
   "routes": [
     {
       "src": "/static/(.*)",
