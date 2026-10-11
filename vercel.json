@@ -10,8 +10,7 @@
         "includeFiles": [
           "static/**",
           "templates/**",
-          "data/**",
-          "ir_captcha_templates.py"
+          "data/**"
         ],
         "excludeFiles": [
           "venv/**",
