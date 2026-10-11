@@ -2,6 +2,7 @@ import http.cookiejar
 import io
 import json
 import re
+import threading
 
 import logging
 import os
@@ -1858,6 +1859,121 @@ def api_trains(user):
     return jsonify({"success": True, "items": items})
 
 
+_IR_HOME = "https://www.indianrail.gov.in/enquiry/StaticPages/StaticEnquiry.jsp?lang=en"
+_IR_API_URL = "https://www.indianrail.gov.in/enquiry/CommonCaptcha"
+_UACHROME = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+             "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+_IR_LOCK = threading.Lock()
+_IR_LAST_CALL = 0.0
+_IR_MIN_GAP = 1.0
+
+
+def _ir_wait():
+    """indianrail par burst se rate-limit na lag jaye, calls ke beech min gap."""
+    global _IR_LAST_CALL
+    now = time.time()
+    with _IR_LOCK:
+        wait = _IR_MIN_GAP - (now - _IR_LAST_CALL)
+        if wait > 0:
+            time.sleep(wait)
+        _IR_LAST_CALL = time.time()
+
+_CLS_RE1 = re.compile(r"(^|[|:,~])([123]A|2S|SL|CC|3E|FC)(?=[:|,|~])")
+_CLS_RE2 = re.compile(r"(?<![A-Z])(1A|2A|3A|3E|SL|2S|CC|FC)(?=[:,\s|])")
+_CLASS_SORT = ["1A", "2A", "3A", "CC", "FC", "SL", "2S", "3E"]
+
+
+def _clean_erail_time(t):
+    s = (t or "").strip()
+    if "." in s:
+        s = s.replace(".", ":")
+    return s
+
+
+def _find_classes_from_raw(row):
+    found = []
+    for m in _CLS_RE1.finditer(row or ""):
+        c = m.group(2)
+        if c not in found:
+            found.append(c)
+    for m in _CLS_RE2.finditer(row or ""):
+        c = m.group(0)
+        if c not in found:
+            found.append(c)
+    return sorted(found, key=lambda c: _CLASS_SORT.index(c) if c in _CLASS_SORT else 999)
+
+
+def _guess_train_type(chunk):
+    up = (chunk or "").upper().replace(" ", "_")
+    for c in ("SUPERFAST", "MAIL_&_EXPRESS", "MAIL_EXPRESS", "HUMSAFAR", "ANTYODAYA",
+              "RAJDHANI", "SHATABDI", "DURONTO", "JAN_SHATABDI", "SPECIAL",
+              "PASSENGER", "ORDINARY"):
+        if c in up:
+            return c.replace("_", " ")
+    return ""
+
+
+def _runs_on_date(days_bits, iso_date):
+    if not days_bits or len(days_bits) != 7 or not re.match(r"^[01]{7}$", days_bits):
+        return True
+    try:
+        d = datetime.strptime(iso_date or "", "%Y-%m-%d")
+    except Exception:
+        return True
+    return days_bits[d.weekday()] == "1"
+
+
+def _map_train_type(raw):
+    r = (raw or "").strip()
+    up = r.upper()
+    if up in ("EXP", "PASS", "DMU", "EMU"):
+        return up
+    low = r.lower()
+    if "passenger" in low or "ordinary" in low or low in ("pass", "pas"):
+        return "PASS"
+    if "dmu" in low or "emu" in low or "memu" in low or low in ("mem", "loc"):
+        return "DMU"
+    return "EXP"
+
+
+def _total_fare(obj, avl):
+    for key in ("totalFare", "fare", "fareAmt", "fareAmount"):
+        v = obj.get(key)
+        if v not in (None, "", 0):
+            return str(v)
+    if avl:
+        for key in ("totalFare", "fare", "fareAmt", "fareAmount"):
+            v = avl[0].get(key)
+            if v not in (None, "", 0):
+                return str(v)
+    return ""
+
+
+def _status_for_date(avl, date_ddmmyyyy):
+    p = date_ddmmyyyy.split("-")
+    iso = f"{p[2]}-{p[1]}-{p[0]}" if len(p) == 3 else ""
+    hit = next((d for d in avl if d.get("availablityDate") == iso), None)
+    if hit is None:
+        best = avl[0]
+        try:
+            target = datetime.strptime(iso, "%Y-%m-%d")
+        except Exception:
+            target = None
+        if target is not None:
+            best_diff = None
+            for d in avl:
+                try:
+                    cd = datetime.strptime(str(d.get("availablityDate"))[:10], "%Y-%m-%d")
+                except Exception:
+                    continue
+                diff = abs((cd - target).days)
+                if best_diff is None or diff < best_diff:
+                    best_diff = diff
+                    best = d
+        hit = best
+    return (hit.get("availablityStatus") or "").strip()
+
+
 @app.route("/api/train-search")
 @login_required
 def api_train_search(user):
@@ -1878,8 +1994,10 @@ def api_train_search(user):
         req = urllib.request.Request(
             url,
             headers={
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
-                "Referer": "https://erail.in/",
+                "User-Agent": _UACHROME,
+                "Accept": "*/*",
+                "Referer": f"https://erail.in/trains-between-stations/{src}/{dst}",
+                "X-Requested-With": "XMLHttpRequest",
             },
         )
         with urllib.request.urlopen(req, timeout=25) as resp:
@@ -1888,44 +2006,32 @@ def api_train_search(user):
         logger.exception("Train search network error")
         return jsonify({"success": False, "error": "Train list nahi mili (network issue)."}), 502
 
-    wdab = ["M", "T", "W", "TH", "F", "S", "SU"]
-    wd = ""
-    try:
-        p = date.replace("-", "/").split("/")
-        if len(p) == 3:
-            for trial in (p, [p[1], p[2], p[0]], [p[2], p[1], p[0]]):
-                try:
-                    r = datetime(int(trial[0]), int(trial[1]), int(trial[2]))
-                    wd = wdab[r.weekday()]
-                    break
-                except ValueError:
-                    continue
-    except Exception:
-        wd = ""
-
-    clsbits = ["1A", "2A", "3A", "CC", "FC", "SL", "2S", "3E", "", "EA", "EC", "EV"]
     trains = []
     for rec in text.split("^")[1:]:
-        f = rec.split("~")
+        row = rec.strip()
+        if not row:
+            continue
+        fields = row.split("~")
+        if len(fields) < 13:
+            continue
         try:
-            num = f[0].strip()
-            if not num.isdigit() or len(f) < 22:
+            num = fields[0].strip()
+            if not num.isdigit():
                 continue
-            days = (f[13] + "0000000")[:7]
-            if wd and days[wdab.index(wd)] != "1":
+            days = fields[13].strip() if len(fields) > 13 and re.match(r"^[01]{7}$", fields[13].strip()) else ""
+            if not _runs_on_date(days, date):
                 continue
-            bits = (f[21] + "000000000000")[:12]
-            have = [clsbits[k] for k in range(12) if bits[k] == "1" and clsbits[k]]
             trains.append({
                 "num": num,
-                "name": f[1].strip(),
-                "from": f[7].strip(),
-                "depart": f[10].strip(),
-                "to": f[9].strip(),
-                "arrive": f[11].strip(),
-                "duration": f[12].strip(),
+                "name": fields[1].strip(),
+                "from": fields[7].strip(),
+                "to": fields[9].strip(),
+                "depart": _clean_erail_time(fields[10]),
+                "arrive": _clean_erail_time(fields[11]),
+                "duration": fields[12].strip(),
                 "days": days,
-                "classes": have,
+                "classes": _find_classes_from_raw(row),
+                "type": _guess_train_type(row) or "EXP",
             })
         except Exception:
             continue
@@ -2078,7 +2184,8 @@ def _ir_solve_captcha(session):
         from PIL import Image, ImageOps
         import pytesseract
         pytesseract.pytesseract.tesseract_cmd = _IR_TESSERACT
-        png = session.get("https://www.indianrail.gov.in/enquiry/captchaDraw.png", timeout=20).content
+        _ir_wait()
+        png = session.get(f"https://www.indianrail.gov.in/enquiry/captchaDraw.png?t={int(time.time() * 1000)}", timeout=20).content
         im = Image.open(io.BytesIO(png)).convert("RGBA")
         bg = Image.new("RGB", im.size, (255, 255, 255))
         bg.paste(im, mask=im.split()[3])
@@ -2099,105 +2206,119 @@ def _ir_solve_captcha(session):
         return ""
 
 
-def fetch_indianrail_availability(train_no, frm, to, cls, quota, date_ddmmyyyy, train_name=""):
-    """Indian Rail (indianrail.gov.in) se availability + fare. Returns (status, fare)."""
+def fetch_indianrail_availability(train_no, frm, to, cls, quota, date_ddmmyyyy, train_type="EXP"):
+    """Indian Rail (indianrail.gov.in) ek hi TBIS_CALL_FOR_FARE call me availability + fare. Returns (status, fare)."""
     import time as _time
     import requests
     try:
-        res = requests.get("https://www.indianrail.gov.in/enquiry/", timeout=25)
-        if res.status_code != 200:
-            return ("", "")
+        s = requests.Session()
+        s.headers.update({
+            "User-Agent": _UACHROME,
+            "Referer": _IR_HOME,
+            "Accept-Language": "en-US,en;q=0.9",
+        })
+        s.get(_IR_HOME, timeout=25)
     except Exception:
         return ("", "")
 
-    tn = _ir_train_full(train_no, train_name)
-    src = _ir_station_full(frm)
-    dst = _ir_station_full(to)
-    if not tn or not src or not dst:
-        return ("", "")
-
-    for _try in range(2):
+    last_em = ""
+    tries = 14
+    for attempt in range(1, tries + 1):
+        ans = _ir_solve_captcha(s)
+        if not ans:
+            _time.sleep(0.3)
+            continue
         try:
-            s = requests.Session()
-            s.headers.update({
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-            })
-            s.get("https://www.indianrail.gov.in/enquiry/SEAT/SeatAvailability.html?locale=en", timeout=25)
-            base = {
-                "trainNo": tn,
+            ps = {
+                "inputCaptcha": ans,
+                "inputPage": "TBIS_CALL_FOR_FARE",
+                "trainNo": str(train_no).strip(),
                 "dt": date_ddmmyyyy,
-                "sourceStation": src,
-                "destinationStation": dst,
+                "sourceStation": frm,
+                "destinationStation": to,
                 "classc": cls,
                 "quota": quota,
+                "traintype": _map_train_type(train_type),
                 "language": "en",
-                "inputPnrNo": "",
+                "_": int(_time.time() * 1000),
             }
-            status = ""
-            ans = _ir_solve_captcha(s)
-            if ans:
-                ps = dict(base)
-                ps["inputPage"] = "SEAT"
-                ps["inputCaptcha"] = ans
-                ps["_"] = int(_time.time() * 1000)
-                j = s.get("https://www.indianrail.gov.in/enquiry/CommonCaptcha", params=ps, timeout=30).json()
-                em = (j.get("errorMessage") or "").strip()
-                if not em:
-                    av = j.get("avlDayList") or []
-                    if av:
-                        p = date_ddmmyyyy.split("-")
-                        iso = f"{p[2]}-{p[1]}-{p[0]}" if len(p) == 3 else ""
-                        hit = next((d for d in av if d.get("availablityDate") == iso), av[0])
-                        status = hit.get("availablityStatus", "") or ""
-            fare = ""
-            if status:
-                ans2 = _ir_solve_captcha(s)
-                if ans2:
-                    pf = dict(base)
-                    pf["inputPage"] = "FARE"
-                    pf["inputCaptcha"] = ans2
-                    pf["_"] = int(_time.time() * 1000)
-                    jf = s.get("https://www.indianrail.gov.in/enquiry/CommonCaptcha", params=pf, timeout=30).json()
-                    if not (jf.get("errorMessage") or "").strip():
-                        tf = jf.get("totalFare")
-                        fare = str(tf) if tf not in (None, "", 0) else ""
-                        if not fare:
-                            bf = jf.get("baseFare")
-                            fare = str(bf) if bf not in (None, "", 0) else ""
-            if status or fare:
-                return (status, fare)
+            _ir_wait()
+            j = s.get(_IR_API_URL, params=ps, timeout=30).json()
         except Exception:
+            if attempt < tries:
+                _time.sleep(0.5)
             continue
-    return ("", "")
+        em = (j.get("errorMessage") or "").strip()
+        avl = j.get("avlDayList") or []
+        if avl:
+            return (_status_for_date(avl, date_ddmmyyyy), _total_fare(j, avl))
+        if em:
+            last_em = em
+            low = em.lower()
+            if "captcha" in low or "session" in low:
+                _time.sleep(0.4)
+                continue
+            if "invalid facnam" in low or "facnam" in low or "server id" in low or "temporary" in low:
+                _time.sleep(4)
+                continue
+            return (em, "")
+    return (last_em, "")
+
+
+def _erail_train_route(train_no, frm, to):
+    """erail list me se train ka exact board/alight code + type (frontend user-typed codes rakhne par bhi sahi leg milta hai)."""
+    url = (
+        "https://erail.in/rail/getTrains.aspx?"
+        f"Station_From={urllib.parse.quote(frm)}&Station_To={urllib.parse.quote(to)}"
+        "&DataSource=0&Language=0&Cache=true"
+    )
+    try:
+        req = urllib.request.Request(
+            url,
+            headers={
+                "User-Agent": _UACHROME,
+                "Accept": "*/*",
+                "Referer": f"https://erail.in/trains-between-stations/{frm}/{to}",
+                "X-Requested-With": "XMLHttpRequest",
+            },
+        )
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            text = resp.read().decode("utf-8", errors="ignore")
+    except Exception:
+        return None
+    for rec in text.split("^")[1:]:
+        fields = rec.strip().split("~")
+        if len(fields) < 13:
+            continue
+        if fields[0].strip() == str(train_no).strip():
+            return (fields[7].strip(), fields[9].strip(), _guess_train_type(rec) or "EXP")
+    return None
 
 
 @app.route("/api/train-avail")
 @login_required
 def api_train_avail(user):
     train = (request.args.get("train") or "").strip()
-    train_name = (request.args.get("name") or "").strip()
     frm = (request.args.get("from") or "").strip()
     to = (request.args.get("to") or "").strip()
     cls = (request.args.get("cls") or "SL").strip()
     quota = (request.args.get("quota") or "GN").strip()
+    ttype = (request.args.get("type") or "EXP").strip()
     date = (request.args.get("date") or "").strip()
     frm = frm.split(" - ")[-1].strip() if " - " in frm else frm
     to = to.split(" - ")[-1].strip() if " - " in to else to
     if not train or not frm or not to:
         return jsonify({"success": False, "error": "Train, From aur To chahiye."}), 400
+    route = _erail_train_route(train, frm, to)
+    if route:
+        frm, to, ttype = route
     if not date:
         date = datetime.now(timezone(timedelta(hours=5, minutes=30))).strftime("%Y-%m-%d")
     status, fare = "", ""
     p = date.split("-")
     if len(p) == 3:
         date_ddmmyyyy = f"{int(p[2]):02d}-{int(p[1]):02d}-{p[0]}"
-        status, fare = fetch_indianrail_availability(train, frm, to, cls, quota, date_ddmmyyyy, train_name)
-    if not status or not fare:
-        er_status, er_fare = _fetch_erail_availability(train, frm, to, cls, quota, date)
-        if not status:
-            status = er_status
-        if not fare:
-            fare = er_fare
+        status, fare = fetch_indianrail_availability(train, frm, to, cls, quota, date_ddmmyyyy, ttype)
     return jsonify({"success": True, "status": status or "Not Available", "fare": fare})
 
 
