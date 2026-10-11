@@ -2178,18 +2178,109 @@ def _ir_train_full(num, name=""):
     return num
 
 
+_IR_TEMPLATE_BITS = {}
+try:
+    from ir_captcha_templates import IR_CAPTCHA_TEMPLATES as _IR_RAW_TEMPLATES
+    _IR_TEMPLATE_BITS = {k: bytes(1 if c == '1' else 0 for c in v[0]) for k, v in _IR_RAW_TEMPLATES.items()}
+except Exception:
+    _IR_TEMPLATE_BITS = {}
+
+
+def _ir_captcha_components(g, thresh=128):
+    W, H = g.size
+    px = g.load()
+    seen = [[False] * W for _ in range(H)]
+    out = []
+    dirs = [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)]
+    for y in range(H):
+        for x in range(W):
+            if px[x, y] < thresh and not seen[y][x]:
+                st = [(x, y)]
+                seen[y][x] = True
+                xs = []
+                ys = []
+                while st:
+                    cx, cy = st.pop()
+                    xs.append(cx)
+                    ys.append(cy)
+                    for dx, dy in dirs:
+                        nx, ny = cx + dx, cy + dy
+                        if 0 <= nx < W and 0 <= ny < H and not seen[ny][nx] and px[nx, ny] < thresh:
+                            seen[ny][nx] = True
+                            st.append((nx, ny))
+                out.append((min(xs), min(ys), max(xs) - min(xs) + 1, max(ys) - min(ys) + 1))
+    return sorted(out, key=lambda b: (b[0], b[1]))
+
+
+def _ir_solve_captcha_pure(png):
+    import io
+    from PIL import Image
+    im = Image.open(io.BytesIO(png)).convert("RGBA")
+    bg = Image.new("RGB", im.size, (255, 255, 255))
+    bg.paste(im, mask=im.split()[3])
+    g = bg.convert("L")
+    cs = _ir_captcha_components(g)
+    if len(cs) < 6:
+        return ""
+    expr = cs[:-4]
+    op = [c for c in expr if c[3] != 12]
+    if len(op) != 1:
+        return ""
+    idx = expr.index(op[0])
+    if idx == 0 or idx == len(expr) - 1:
+        return ""
+    opch = "+" if op[0][2] == 10 and op[0][3] == 10 else "-"
+
+    def cl(c):
+        crop = g.crop((c[0], c[1], c[0] + c[2], c[1] + c[3])).resize((12, 12), Image.LANCZOS)
+        pc = crop.load()
+        b = bytes(1 if pc[x, y] < 128 else 0 for y in range(12) for x in range(12))
+        best = None
+        bb = -1
+        for ch, t in _IR_TEMPLATE_BITS.items():
+            sc = sum(1 for i in range(144) if b[i] == t[i])
+            if sc > bb:
+                best, bb = ch, sc
+        return best
+
+    o1 = "".join(cl(c) for c in expr[:idx])
+    o2 = "".join(cl(c) for c in expr[idx + 1:])
+    if not (o1.isdigit() and o2.isdigit()):
+        return ""
+    try:
+        return str(eval(o1 + opch + o2))
+    except Exception:
+        return ""
+
+
 def _ir_solve_captcha(session):
     import io
     try:
-        from PIL import Image, ImageOps
-        import pytesseract
-        pytesseract.pytesseract.tesseract_cmd = _IR_TESSERACT
+        from PIL import Image
+    except Exception:
+        return ""
+    try:
         _ir_wait()
         png = session.get(f"https://www.indianrail.gov.in/enquiry/captchaDraw.png?t={int(time.time() * 1000)}", timeout=20).content
+    except Exception:
+        return ""
+    try:
+        ans = _ir_solve_captcha_pure(png)
+        if ans:
+            return ans
+    except Exception:
+        pass
+    try:
+        import pytesseract
+        import os as _os
+        if not _os.path.exists(_IR_TESSERACT):
+            return ""
+        pytesseract.pytesseract.tesseract_cmd = _IR_TESSERACT
         im = Image.open(io.BytesIO(png)).convert("RGBA")
         bg = Image.new("RGB", im.size, (255, 255, 255))
         bg.paste(im, mask=im.split()[3])
         g = bg.convert("L").resize((im.width * 5, im.height * 5))
+        from PIL import ImageOps
         g = ImageOps.autocontrast(g, cutoff=1)
         raw = pytesseract.image_to_string(
             g, config="--oem 3 --psm 7 -c tessedit_char_whitelist=0123456789+-="
