@@ -2399,6 +2399,7 @@ def _erail_train_route(train_no, frm, to):
 @login_required
 def api_train_avail(user):
     train = (request.args.get("train") or "").strip()
+    train_name = (request.args.get("name") or "").strip()
     frm = (request.args.get("from") or "").strip()
     to = (request.args.get("to") or "").strip()
     cls = (request.args.get("cls") or "SL").strip()
@@ -2409,17 +2410,47 @@ def api_train_avail(user):
     to = to.split(" - ")[-1].strip() if " - " in to else to
     if not train or not frm or not to:
         return jsonify({"success": False, "error": "Train, From aur To chahiye."}), 400
+
     route = _erail_train_route(train, frm, to)
     if route:
         frm, to, ttype = route
+
     if not date:
         date = datetime.now(timezone(timedelta(hours=5, minutes=30))).strftime("%Y-%m-%d")
+
     status, fare = "", ""
-    p = date.split("-")
-    if len(p) == 3:
-        date_ddmmyyyy = f"{int(p[2]):02d}-{int(p[1]):02d}-{p[0]}"
-        status, fare = fetch_indianrail_availability(train, frm, to, cls, quota, date_ddmmyyyy, ttype)
-    return jsonify({"success": True, "status": status or "Not Available", "fare": fare})
+    error_msg = None
+
+    try:
+        p = date.split("-")
+        if len(p) == 3:
+            date_ddmmyyyy = f"{int(p[2]):02d}-{int(p[1]):02d}-{p[0]}"
+            status, fare = fetch_indianrail_availability(train, frm, to, cls, quota, date_ddmmyyyy, ttype)
+            logger.info("IndianRail response: train=%s, status=%s, fare=%s", train, status, fare)
+    except Exception as e:
+        logger.exception("IndianRail availability check failed: %s", e)
+        error_msg = f"IndianRail error: {str(e)[:50]}"
+
+    # Try erail as fallback
+    if not status or not fare:
+        try:
+            er_status, er_fare = _fetch_erail_availability(train, frm, to, cls, quota, date)
+            if not status:
+                status = er_status
+            if not fare:
+                fare = er_fare
+            logger.info("Erail fallback response: train=%s, status=%s, fare=%s", train, status, fare)
+        except Exception as e:
+            logger.exception("Erail availability check failed: %s", e)
+            if not error_msg:
+                error_msg = f"Erail error: {str(e)[:50]}"
+
+    return jsonify({
+        "success": bool(status and fare),
+        "status": status or "Not Available",
+        "fare": fare or "-",
+        "debug": error_msg  # Remove this in production, for now debugging
+    })
 
 
 @app.route("/api/tickets", methods=["GET"])

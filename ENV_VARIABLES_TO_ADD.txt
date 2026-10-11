@@ -1,0 +1,110 @@
+VERCEL ENVIRONMENT VARIABLES - COPY PASTE READY
+================================================================
+
+Ye sab variables Vercel Dashboard mein add karo:
+https://vercel.com/travel-cd0a/nxtgenprs/settings/environment-variables
+
+"Add New" button click karke ek-ek karke add karo.
+Har variable ke liye Production, Preview, Development teeno check karo.
+
+================================================================
+
+Variable 1:
+Key: MONGO_URI
+Value: mongodb+srv://prajapatipoojaram650_db_user:1ELuTU03kL9J5KwN@prajapatipooja.ck5xuvs.mongodb.net/?appName=prajapatipooja
+
+----------------------------------------------------------------
+
+Variable 2:
+Key: MONGO_DB_NAME
+Value: prakash_travel
+
+----------------------------------------------------------------
+
+Variable 3:
+Key: SECRET_KEY
+Value: 8607CB82DB8AAEAD71E958B706B0A7C05DDBEF65F806049913A3F496104BC7D23D590CAF36F282D4846AB6079436D1E8
+
+----------------------------------------------------------------
+
+Variable 4:
+Key: B2_KEY_ID
+Value: 0056f820e66c5a30000000001
+
+----------------------------------------------------------------
+
+Variable 5:
+Key: B2_APPLICATION_KEY
+Value: K0058nTtVvng8/Na2BS6aPRTKO1GilA
+
+----------------------------------------------------------------
+
+Variable 6:
+Key: B2_BUCKET_NAME
+Value: my-pdf-storage-2026
+
+----------------------------------------------------------------
+
+Variable 7:
+Key: B2_ENDPOINT
+Value: https://s3.us-east-005.backblazeb2.com
+
+----------------------------------------------------------------
+
+Variable 8:
+Key: B2_REGION
+Value: us-east-005
+
+----------------------------------------------------------------
+
+Variable 9:
+Key: SESSION_COOKIE_SECURE
+Value: true
+
+----------------------------------------------------------------
+
+Variable 10:
+Key: MAX_PDF_SIZE_MB
+Value: 50
+
+----------------------------------------------------------------
+
+Variable 11:
+Key: PRESIGNED_URL_EXPIRY
+Value: 900
+
+----------------------------------------------------------------
+
+Variable 12:
+Key: PUBLIC_LIST_CACHE_SECONDS
+Value: 30
+
+----------------------------------------------------------------
+
+Variable 13:
+Key: PDF_RETENTION_DAYS
+Value: 100
+
+----------------------------------------------------------------
+
+Variable 14:
+Key: PURGE_INTERVAL_SECONDS
+Value: 900
+
+================================================================
+
+STEPS:
+1. "Add New" button click karo
+2. Key copy-paste karo
+3. Value copy-paste karo
+4. Environments: Production ✓ Preview ✓ Development ✓
+5. "Save" click karo
+6. Repeat for all 14 variables
+
+AFTER ADDING ALL VARIABLES:
+- Git push karo ya Vercel mein Redeploy karo
+- 2-3 minutes wait karo
+- Test: https://nxtgenprs.vercel.app/admin-login
+- Login: PK96 / PAS
+
+================================================================
