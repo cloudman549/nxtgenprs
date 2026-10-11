@@ -2429,35 +2429,58 @@ def api_train_avail(user):
     status, fare = "", ""
     error_msg = None
 
-    try:
-        p = date.split("-")
-        if len(p) == 3:
-            date_ddmmyyyy = f"{int(p[2]):02d}-{int(p[1]):02d}-{p[0]}"
-            status, fare = fetch_indianrail_availability(train, frm, to, cls, quota, date_ddmmyyyy, ttype)
-            logger.info("IndianRail response: train=%s, status=%s, fare=%s", train, status, fare)
-    except Exception as e:
-        logger.exception("IndianRail availability check failed: %s", e)
-        error_msg = f"IndianRail error: {str(e)[:50]}"
-
-    # Try erail as fallback
-    if not status or not fare:
+    # On Vercel, skip IndianRail (captcha solving fails)
+    # Directly go to Erail
+    if not (os.environ.get('VERCEL') or os.environ.get('VERCEL_ENV')):
+        # Localhost: Try IndianRail first
         try:
-            er_status, er_fare = _fetch_erail_availability(train, frm, to, cls, quota, date)
-            if not status:
-                status = er_status
-            if not fare:
-                fare = er_fare
-            logger.info("Erail fallback response: train=%s, status=%s, fare=%s", train, status, fare)
+            p = date.split("-")
+            if len(p) == 3:
+                date_ddmmyyyy = f"{int(p[2]):02d}-{int(p[1]):02d}-{p[0]}"
+                status, fare = fetch_indianrail_availability(train, frm, to, cls, quota, date_ddmmyyyy, ttype)
+                if status and fare:
+                    logger.info("✓ IndianRail SUCCESS: train=%s, status=%s, fare=%s", train, status, fare)
+                    return jsonify({
+                        "success": True,
+                        "status": status,
+                        "fare": fare,
+                        "source": "indianrail"
+                    })
+                else:
+                    logger.info("⚠ IndianRail returned empty: train=%s", train)
         except Exception as e:
-            logger.exception("Erail availability check failed: %s", e)
-            if not error_msg:
-                error_msg = f"Erail error: {str(e)[:50]}"
+            logger.warning("IndianRail FAILED: %s", str(e)[:100])
+            error_msg = f"IndianRail: {str(e)[:50]}"
+    else:
+        logger.info("Vercel detected - skipping IndianRail, using Erail only")
 
+    # Fallback to Erail (works on both localhost and Vercel)
+    logger.info("→ Trying Erail fallback for train=%s", train)
+    try:
+        er_status, er_fare = _fetch_erail_availability(train, frm, to, cls, quota, date)
+        if er_status and er_fare:
+            logger.info("✓ Erail SUCCESS: train=%s, status=%s, fare=%s", train, er_status, er_fare)
+            return jsonify({
+                "success": True,
+                "status": er_status,
+                "fare": er_fare,
+                "source": "erail"
+            })
+        else:
+            logger.info("⚠ Erail returned empty: train=%s", train)
+    except Exception as e:
+        logger.warning("Erail FAILED: %s", str(e)[:100])
+        if not error_msg:
+            error_msg = f"Erail: {str(e)[:50]}"
+
+    # Dono fail hua - graceful response
+    logger.warning("✗ BOTH IndianRail and Erail failed for train=%s", train)
     return jsonify({
-        "success": bool(status and fare),
-        "status": status or "Not Available",
-        "fare": fare or "-",
-        "debug": error_msg  # Remove this in production, for now debugging
+        "success": False,
+        "status": "Not Available",
+        "fare": "-",
+        "error": error_msg or "Availability check failed. Try again later.",
+        "source": "none"
     })
 
 
