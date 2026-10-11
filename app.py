@@ -2307,7 +2307,15 @@ def _ir_solve_captcha(session):
 
 
 def fetch_indianrail_availability(train_no, frm, to, cls, quota, date_ddmmyyyy, train_type="EXP"):
-    """Indian Rail (indianrail.gov.in) ek hi TBIS_CALL_FOR_FARE call me availability + fare. Returns (status, fare)."""
+    """Indian Rail (indianrail.gov.in) ek hi TBIS_CALL_FOR_FARE call me availability + fare. Returns (status, fare).
+
+    NOTE: Vercel serverless pe captcha solve nahi hota - will skip and fallback to erail.
+    """
+    # Skip IndianRail on Vercel - captcha solving doesn't work in serverless
+    if os.environ.get('VERCEL') or os.environ.get('VERCEL_ENV'):
+        logger.debug("Skipping IndianRail on Vercel - will use erail fallback")
+        return ("", "")
+
     import time as _time
     import requests
     try:
