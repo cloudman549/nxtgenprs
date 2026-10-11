@@ -415,8 +415,24 @@
       "&cls=" + encodeURIComponent(c) +
       "&quota=" + encodeURIComponent(quotaInput.value) +
       "&date=" + encodeURIComponent(dateInput.value || "");
-    fetch("/api/train-avail" + params, { headers: { "X-CSRF-Token": csrf } })
-      .then(function (r) { return r.json(); })
+    // Timeout protection for Vercel serverless
+    var timeoutId = setTimeout(function () {
+      if (!currentPick) return;
+      clearPick();
+      trainModalMsg.textContent = "Fare availability fetch timeout. Try again.";
+      trainSel.classList.remove("hidden");
+      trainSelInfo.innerHTML = "<span class='err-text'>Availability check timeout. Manual entry available.</span>";
+      trainSelInfo.className = "train-sel-info avail-no";
+    }, 12000); // 12 second timeout
+
+    fetch("/api/train-avail" + params, {
+      headers: { "X-CSRF-Token": csrf },
+      signal: AbortSignal.timeout ? AbortSignal.timeout(10000) : undefined // 10s timeout
+    })
+      .then(function (r) {
+        clearTimeout(timeoutId);
+        return r.json();
+      })
       .then(function (data) {
         if (!currentPick) return;
         var status = data.success ? (data.status || "Not Available") : "-";
@@ -440,9 +456,14 @@
         trainModalMsg.textContent = "";
         trainSel.classList.remove("hidden");
       })
-      .catch(function () {
+      .catch(function (err) {
+        clearTimeout(timeoutId);
+        if (!currentPick) return;
         clearPick();
-        trainModalMsg.textContent = "Fare/availability lete waqt error aaya.";
+        var errMsg = err && err.name === "AbortError" ? "Request timeout. Try again." : "Fare/availability lete waqt error aaya.";
+        trainModalMsg.textContent = errMsg;
+        trainSelInfo.innerHTML = "<span class='err-text'>" + errMsg + "</span>";
+        trainSelInfo.className = "train-sel-info avail-no";
       });
   }
 
