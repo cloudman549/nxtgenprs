@@ -2050,7 +2050,7 @@ def _fetch_erail_availability(train_no, frm, to, cls, quota, date_iso):
             ("Accept", "application/json"),
         ]
         try:
-            opener.open("https://erail.in/", timeout=12)
+            opener.open("https://erail.in/", timeout=25)  # Increased timeout
         except Exception:
             pass
 
@@ -2071,7 +2071,7 @@ def _fetch_erail_availability(train_no, frm, to, cls, quota, date_iso):
                 "Referer": "https://erail.in/",
             },
         )
-        with opener.open(req, timeout=20) as resp:
+        with opener.open(req, timeout=45) as resp:  # Increased to 45s for Vercel
             obj = json.loads(resp.read().decode("utf-8", "ignore"))
         ds = (obj.get("data") or obj.get("Data") or "").strip()
         if not ds:
@@ -2100,7 +2100,7 @@ def _fetch_erail_availability(train_no, frm, to, cls, quota, date_iso):
                         "Referer": "https://erail.in/",
                     },
                 )
-                with opener.open(req2, timeout=20) as resp2:
+                with opener.open(req2, timeout=45) as resp2:  # Increased to 45s for Vercel
                     obj2 = json.loads(resp2.read().decode("utf-8", "ignore"))
                 ds2 = (obj2.get("data") or obj2.get("Data") or "").strip()
                 for seg2 in ds2.split("~"):
@@ -2121,7 +2121,12 @@ def _fetch_erail_availability(train_no, frm, to, cls, quota, date_iso):
 _IR_FEED_CACHE = None
 _IR_FEED_TS = 0
 _IR_FEED_TTL = 6 * 3600
-_IR_TESSERACT = r"C:\Users\ASHISH KUMAR\OneDrive\Desktop\KILLER SUCCESS\Tesseract-OCR\tesseract.exe"
+# Tesseract path - Vercel pe "tesseract" command use karo (system-installed)
+# Localhost pe Windows path
+_IR_TESSERACT = os.environ.get("TESSERACT_CMD") or (
+    "tesseract" if os.environ.get("VERCEL") else
+    r"C:\Users\ASHISH KUMAR\OneDrive\Desktop\KILLER SUCCESS\Tesseract-OCR\tesseract.exe"
+)
 
 
 def _ir_feed_maps(timeout=15):
@@ -2309,13 +2314,8 @@ def _ir_solve_captcha(session):
 def fetch_indianrail_availability(train_no, frm, to, cls, quota, date_ddmmyyyy, train_type="EXP"):
     """Indian Rail (indianrail.gov.in) ek hi TBIS_CALL_FOR_FARE call me availability + fare. Returns (status, fare).
 
-    NOTE: Vercel serverless pe captcha solve nahi hota - will skip and fallback to erail.
+    Captcha solving with Tesseract - works on both localhost and Vercel.
     """
-    # Skip IndianRail on Vercel - captcha solving doesn't work in serverless
-    if os.environ.get('VERCEL') or os.environ.get('VERCEL_ENV'):
-        logger.debug("Skipping IndianRail on Vercel - will use erail fallback")
-        return ("", "")
-
     import time as _time
     import requests
     try:
