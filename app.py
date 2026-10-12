@@ -1378,15 +1378,15 @@ def _build_employee_card_pdf(doc):
 
     # band text
     c.setFillColor(colors.white)
-    c.setFont("Helvetica-Bold", 19)
+    c.setFont(_FONT_BOLD, 19)
     c.drawString(x0 + 14 * mm, y0 + CARD_H - 11.5 * mm, "NXTGen PRS")
-    c.setFont("Helvetica", 7.5)
+    c.setFont(_FONT_NORMAL, 7.5)
     c.setFillColor(colors.HexColor("#c7d2fe"))
     c.drawString(x0 + 14 * mm, y0 + CARD_H - 17.5 * mm, "P R O G R E S S I V E   R A I L   S Y S T E M")
     c.setFillColor(colors.white)
-    c.setFont("Helvetica-Bold", 12)
+    c.setFont(_FONT_BOLD, 12)
     c.drawRightString(x0 + CARD_W - 14 * mm, y0 + CARD_H - 11.5 * mm, "EMPLOYEE ID CARD")
-    c.setFont("Helvetica", 7)
+    c.setFont(_FONT_NORMAL, 7)
     c.setFillColor(colors.HexColor("#c7d2fe"))
     c.drawRightString(x0 + CARD_W - 14 * mm, y0 + CARD_H - 17.5 * mm, "O F F I C I A L   I D E N T I T Y")
 
@@ -1421,7 +1421,7 @@ def _build_employee_card_pdf(doc):
         except Exception:
             photo_ok = False
     if not photo_ok:
-        c.setFont("Helvetica", 9)
+        c.setFont(_FONT_NORMAL, 9)
         c.setFillColor(colors.HexColor("#94a3b8"))
         c.drawCentredString(px + pw / 2.0, py + ph / 2.0 - 3, "PHOTO")
 
@@ -1429,17 +1429,17 @@ def _build_employee_card_pdf(doc):
     dx1 = x0 + 80 * mm
     dx2 = x0 + 160 * mm
     c.setFillColor(colors.HexColor("#0f172a"))
-    c.setFont("Helvetica-Bold", 15)
+    c.setFont(_FONT_BOLD, 15)
     c.drawString(dx1, body_top - 6 * mm, fname)
     dept = str(emp.get("department") or "-")
-    sw = c.stringWidth(dept.upper(), "Helvetica-Bold", 8)
+    sw = c.stringWidth(dept.upper(), _FONT_BOLD, 8)
     pill_w = sw + 8 * mm
     pill_h = 5.6 * mm
     c.setFillColor(colors.HexColor("#eff6ff"))
     pillp = _rounded_path(c, dx1, body_top - 13.6 * mm, pill_w, pill_h, 2.8 * mm)
     c.drawPath(pillp, stroke=0, fill=1)
     c.setFillColor(colors.HexColor("#2563eb"))
-    c.setFont("Helvetica-Bold", 8)
+    c.setFont(_FONT_BOLD, 8)
     c.drawCentredString(dx1 + pill_w / 2.0, body_top - 13.6 * mm + 1.7 * mm, dept.upper())
 
     grid = [
@@ -1452,14 +1452,14 @@ def _build_employee_card_pdf(doc):
         for k, (lab, val) in enumerate(row):
             xx = dx1 if k == 0 else dx2
             c.setFillColor(colors.HexColor("#94a3b8"))
-            c.setFont("Helvetica", 6.5)
+            c.setFont(_FONT_NORMAL, 6.5)
             c.drawString(xx, yy + 3.6 * mm, lab.upper())
             c.setFillColor(colors.HexColor("#0f172a"))
-            c.setFont("Helvetica-Bold", 9.5)
+            c.setFont(_FONT_BOLD, 9.5)
             c.drawString(xx, yy, val)
         yy -= 9 * mm
     c.setFillColor(colors.HexColor("#94a3b8"))
-    c.setFont("Helvetica", 6.5)
+    c.setFont(_FONT_NORMAL, 6.5)
     c.drawString(dx1, yy - 1 * mm, "VALID TILL: PERMANENT  \u2022  OFFICIAL USE ONLY")
 
     # footer
@@ -1468,7 +1468,7 @@ def _build_employee_card_pdf(doc):
     c.line(x0 + 12 * mm, y0 + 14 * mm, x0 + CARD_W - 12 * mm, y0 + 14 * mm)
     # signature
     c.setFillColor(colors.HexColor("#64748b"))
-    c.setFont("Helvetica", 7)
+    c.setFont(_FONT_NORMAL, 7)
     c.drawString(x0 + 14 * mm, y0 + 7.5 * mm, "Authorized Signature")
     c.setStrokeColor(colors.HexColor("#0f172a"))
     c.setLineWidth(1)
@@ -1478,10 +1478,10 @@ def _build_employee_card_pdf(doc):
     # barcode
     _emp_barcode(c, x0 + CARD_W - 14 * mm - 46 * mm, y0 + 18 * mm, 46 * mm, 9 * mm, uname + (emp.get("aadhar") or ""))
     c.setFillColor(colors.HexColor("#64748b"))
-    c.setFont("Helvetica", 6.5)
+    c.setFont(_FONT_NORMAL, 6.5)
     c.drawRightString(x0 + CARD_W - 14 * mm, y0 + 15 * mm, uname)
     c.setFillColor(colors.HexColor("#94a3b8"))
-    c.setFont("Helvetica", 7)
+    c.setFont(_FONT_NORMAL, 7)
     c.drawCentredString(x0 + CARD_W / 2.0, y0 + 7 * mm, "NXTGen PRS  \u2022  www.nxtgen.example  \u2022  employee card")
 
     def _wrap(text, font, size, maxw):
@@ -1519,15 +1519,15 @@ def _build_employee_card_pdf(doc):
     c.setLineWidth(1.3)
     c.drawPath(_rounded_path(c, x0, y0, CARD_W, CARD_H, R), stroke=1, fill=0)
     c.setFillColor(colors.white)
-    c.setFont("Helvetica-Bold", 19)
+    c.setFont(_FONT_BOLD, 19)
     c.drawString(x0 + 14 * mm, y0 + CARD_H - 11.5 * mm, "NXTGen PRS")
-    c.setFont("Helvetica", 7.5)
+    c.setFont(_FONT_NORMAL, 7.5)
     c.setFillColor(colors.HexColor("#c7d2fe"))
     c.drawString(x0 + 14 * mm, y0 + CARD_H - 17.5 * mm, "P R O G R E S S I V E   R A I L   S Y S T E M")
     c.setFillColor(colors.white)
-    c.setFont("Helvetica-Bold", 12)
+    c.setFont(_FONT_BOLD, 12)
     c.drawRightString(x0 + CARD_W - 14 * mm, y0 + CARD_H - 11.5 * mm, "EMPLOYEE ID CARD")
-    c.setFont("Helvetica", 7)
+    c.setFont(_FONT_NORMAL, 7)
     c.setFillColor(colors.HexColor("#c7d2fe"))
     c.drawRightString(x0 + CARD_W - 14 * mm, y0 + CARD_H - 17.5 * mm, "O F F I C I A L   I D E N T I T Y")
 
@@ -1535,7 +1535,7 @@ def _build_employee_card_pdf(doc):
     ay = y0 + CARD_H - 36 * mm
     aw = CARD_W - 28 * mm
     c.setFillColor(colors.HexColor("#64748b"))
-    c.setFont("Helvetica", 7.5)
+    c.setFont(_FONT_NORMAL, 7.5)
     c.drawString(ax, ay, "PERMANENT ADDRESS")
     box_top = ay - 3 * mm
     box_h = 56 * mm
@@ -1543,25 +1543,25 @@ def _build_employee_card_pdf(doc):
     c.setStrokeColor(colors.HexColor("#cbd5e1"))
     c.setLineWidth(0.8)
     c.roundRect(ax, box_top - box_h, aw, box_h, 3 * mm, stroke=1, fill=1)
-    lines = _wrap(addr, "Helvetica-Bold", 13, aw - 18 * mm)
+    lines = _wrap(addr, _FONT_BOLD, 13, aw - 18 * mm)
     if addr == "-":
         lines = ["-"]
     c.setFillColor(colors.HexColor("#0f172a"))
-    c.setFont("Helvetica-Bold", 13)
+    c.setFont(_FONT_BOLD, 13)
     ly = box_top - 10 * mm
     for line in lines:
         c.drawString(ax + 9 * mm, ly, line)
         ly -= 8 * mm
     c.setFillColor(colors.HexColor("#94a3b8"))
-    c.setFont("Helvetica", 6.5)
+    c.setFont(_FONT_NORMAL, 6.5)
     c.drawString(ax, box_top - box_h - 5 * mm, "KEEP THIS CARD SAFE  \u2022  REPORT LOSS IMMEDIATELY TO ADMIN")
     _emp_barcode(c, x0 + CARD_W - 14 * mm - 46 * mm, y0 + 18 * mm, 46 * mm, 9 * mm,
                  uname + (emp.get("aadhar") or "") + addr)
     c.setFillColor(colors.HexColor("#64748b"))
-    c.setFont("Helvetica", 6.5)
+    c.setFont(_FONT_NORMAL, 6.5)
     c.drawRightString(x0 + CARD_W - 14 * mm, y0 + 15 * mm, uname)
     c.setFillColor(colors.HexColor("#94a3b8"))
-    c.setFont("Helvetica", 6.5)
+    c.setFont(_FONT_NORMAL, 6.5)
     c.drawCentredString(x0 + CARD_W / 2.0, y0 + 7 * mm,
                         "This card remains the property of NXTGen Group.")
     c.showPage()
@@ -2392,6 +2392,55 @@ def _ir_solve_captcha(session):
         return ""
 
 
+def _ir_session():
+    """requests session with legacy TLS allowed (indianrail.gov.in uses old TLS ciphers
+    which newer OpenSSL (Vercel/serverless) rejects -> SSLV3_ALERT_HANDSHAKE_FAILURE)."""
+    try:
+        import requests
+        from requests.adapters import HTTPAdapter
+        try:
+            from urllib3.util.ssl_ import create_urllib3_context
+        except Exception:
+            from urllib3.util import create_urllib3_context
+
+        class _LegacyTLSAdapter(HTTPAdapter):
+            def init_poolmanager(self, *args, **kwargs):
+                try:
+                    ctx = create_urllib3_context()
+                    try:
+                        import certifi
+                        ctx.load_verify_locations(certifi.where())
+                    except Exception:
+                        try:
+                            ctx.load_default_certs()
+                        except Exception:
+                            pass
+                    try:
+                        ctx.set_ciphers("DEFAULT@SECLEVEL=1")
+                    except Exception:
+                        pass
+                    try:
+                        ctx.options |= 0x4  # SSL_OP_LEGACY_SERVER_CONNECT
+                    except Exception:
+                        pass
+                    kwargs["ssl_context"] = ctx
+                except Exception:
+                    pass
+                return super().init_poolmanager(*args, **kwargs)
+
+        s = requests.Session()
+        s.mount("https://", _LegacyTLSAdapter())
+        try:
+            import urllib3
+            urllib3.disable_warnings()
+        except Exception:
+            pass
+        return s
+    except Exception:
+        import requests
+        return requests.Session()
+
+
 def fetch_indianrail_availability(train_no, frm, to, cls, quota, date_ddmmyyyy, train_type="EXP"):
     """Indian Rail (indianrail.gov.in) ek hi TBIS_CALL_FOR_FARE call me availability + fare. Returns (status, fare).
 
@@ -2400,7 +2449,7 @@ def fetch_indianrail_availability(train_no, frm, to, cls, quota, date_ddmmyyyy, 
     import time as _time
     import requests
     try:
-        s = requests.Session()
+        s = _ir_session()
         s.headers.update({
             "User-Agent": _UACHROME,
             "Referer": _IR_HOME,
@@ -2906,6 +2955,7 @@ def _build_orders_pdf(docs, label=""):
         paxbox = Table(pax_rows,
                        colWidths=[pax_name_w, 22, 26, 30])
         paxbox.setStyle(TableStyle([
+            ("FONTNAME", (0, 0), (-1, -1), _FONT_NORMAL),
             ("BOX", (0, 0), (-1, -1), 0.9, colors.HexColor("#1d4ed8")),
             ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#f5f8ff")),
             ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#dbeafe")),
