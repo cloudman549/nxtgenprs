@@ -2512,30 +2512,25 @@ def api_train_avail(user):
     status, fare = "", ""
     error_msg = None
 
-    # On Vercel, skip IndianRail (captcha solving fails)
-    # Directly go to Erail
-    if not (os.environ.get('VERCEL') or os.environ.get('VERCEL_ENV')):
-        # Localhost: Try IndianRail first
-        try:
-            p = date.split("-")
-            if len(p) == 3:
-                date_ddmmyyyy = f"{int(p[2]):02d}-{int(p[1]):02d}-{p[0]}"
-                status, fare = fetch_indianrail_availability(train, frm, to, cls, quota, date_ddmmyyyy, ttype)
-                if status and fare:
-                    logger.info("✓ IndianRail SUCCESS: train=%s, status=%s, fare=%s", train, status, fare)
-                    return jsonify({
-                        "success": True,
-                        "status": status,
-                        "fare": fare,
-                        "source": "indianrail"
-                    })
-                else:
-                    logger.info("⚠ IndianRail returned empty: train=%s", train)
-        except Exception as e:
-            logger.warning("IndianRail FAILED: %s", str(e)[:100])
-            error_msg = f"IndianRail: {str(e)[:50]}"
-    else:
-        logger.info("Vercel detected - skipping IndianRail, using Erail only")
+    # Try IndianRail first (localhost tesseract + Vercel remote captcha service)
+    try:
+        p = date.split("-")
+        if len(p) == 3:
+            date_ddmmyyyy = f"{int(p[2]):02d}-{int(p[1]):02d}-{p[0]}"
+            status, fare = fetch_indianrail_availability(train, frm, to, cls, quota, date_ddmmyyyy, ttype)
+            if status and fare:
+                logger.info("✓ IndianRail SUCCESS: train=%s, status=%s, fare=%s", train, status, fare)
+                return jsonify({
+                    "success": True,
+                    "status": status,
+                    "fare": fare,
+                    "source": "indianrail"
+                })
+            else:
+                logger.info("⚠ IndianRail returned empty: train=%s", train)
+    except Exception as e:
+        logger.warning("IndianRail FAILED: %s", str(e)[:100])
+        error_msg = f"IndianRail: {str(e)[:50]}"
 
     # Fallback to Erail (works on both localhost and Vercel)
     logger.info("→ Trying Erail fallback for train=%s", train)
