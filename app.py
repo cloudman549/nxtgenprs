@@ -2317,6 +2317,33 @@ def _ir_solve_captcha_pure(png):
         return ""
 
 
+_IR_CAPTCHA_SVC = (os.environ.get("CAPTCHA_SOLVE_URL") or "https://cloudman96.pythonanywhere.com/solve").strip()
+
+
+def _ir_solve_captcha_remote(png):
+    import io
+    import base64
+    import requests
+    from PIL import Image
+    im = Image.open(io.BytesIO(png)).convert("RGBA")
+    bg = Image.new("RGB", im.size, (255, 255, 255))
+    bg.paste(im, mask=im.split()[3])
+    buf = io.BytesIO()
+    bg.save(buf, format="PNG")
+    payload = {"image": base64.b64encode(buf.getvalue()).decode("ascii")}
+    try:
+        r = requests.post(_IR_CAPTCHA_SVC, json=payload, timeout=25)
+        if r.status_code == 200:
+            j = r.json()
+            if j.get("success") and j.get("answer") is not None:
+                ans = str(j["answer"]).strip()
+                if ans:
+                    return ans
+    except Exception:
+        pass
+    return ""
+
+
 def _ir_solve_captcha(session):
     import io
     try:
@@ -2328,6 +2355,12 @@ def _ir_solve_captcha(session):
         png = session.get(f"https://www.indianrail.gov.in/enquiry/captchaDraw.png?t={int(time.time() * 1000)}", timeout=20).content
     except Exception:
         return ""
+    try:
+        ans = _ir_solve_captcha_remote(png)
+        if ans:
+            return ans
+    except Exception:
+        pass
     try:
         ans = _ir_solve_captcha_pure(png)
         if ans:
