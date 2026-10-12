@@ -49,12 +49,10 @@ try:
     _bundled_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "fonts")
     _family = None
     for _fam, _n, _b, _i, _bi in (
-        ("BarlowCond", "BarlowCondensed-Regular.ttf", "BarlowCondensed-Bold.ttf",
-         "BarlowCondensed-Italic.ttf", "BarlowCondensed-BoldItalic.ttf"),
-        ("BarlowCond", "BarlowCondensed-Regular.ttf", "BarlowCondensed-SemiBold.ttf",
-         "BarlowCondensed-Italic.ttf", "BarlowCondensed-SemiBold.ttf"),
-        ("Verdana", "VERDANA.TTF", "VERDANAB.TTF", "VERDANAI.TTF", "VERDANAZ.TTF"),
+        ("Jakarta", "PlusJakartaSans-Regular.ttf", "PlusJakartaSans-Bold.ttf",
+         "PlusJakartaSans-Italic.ttf", "PlusJakartaSans-BoldItalic.ttf"),
         ("Segoe UI", "segoeui.ttf", "segoeuib.ttf", "segoeuii.ttf", "segoeuiz.ttf"),
+        ("Verdana", "VERDANA.TTF", "VERDANAB.TTF", "VERDANAI.TTF", "VERDANAZ.TTF"),
     ):
         for _dir in (_bundled_dir, _fonts_dir):
             try:
