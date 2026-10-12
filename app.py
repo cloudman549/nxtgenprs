@@ -683,17 +683,67 @@ def index():
 
 @app.route("/healthz")
 def healthz():
-    """Mongo connectivity check — login fail hone par exact reason yahan dikhega."""
+    """Mongo connectivity check + Tesseract check."""
     t0 = time.time()
+    result = {
+        "ok": True,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "environment": "vercel" if os.environ.get('VERCEL') else "localhost"
+    }
+
+    # MongoDB check
     try:
         mongo_client.admin.command("ping")
         users = users_col.count_documents({}, limit=1)
-        return jsonify({"ok": True, "mongo": "connected", "ms": int((time.time() - t0) * 1000),
-                        "users_reachable": users >= 0, "db": Config.MONGO_DB_NAME}), 200
+        result["mongo"] = {
+            "status": "connected",
+            "ms": int((time.time() - t0) * 1000),
+            "users_reachable": users >= 0,
+            "db": Config.MONGO_DB_NAME
+        }
     except Exception as exc:
-        return jsonify({"ok": False, "mongo": "failed", "ms": int((time.time() - t0) * 1000),
-                        "error": type(exc).__name__, "detail": str(exc)[:300],
-                        "db": Config.MONGO_DB_NAME}), 503
+        result["ok"] = False
+        result["mongo"] = {
+            "status": "failed",
+            "ms": int((time.time() - t0) * 1000),
+            "error": type(exc).__name__,
+            "detail": str(exc)[:300],
+            "db": Config.MONGO_DB_NAME
+        }
+
+    # Tesseract check
+    try:
+        import subprocess
+        tesseract_path = _IR_TESSERACT
+        cmd_result = subprocess.run(
+            [tesseract_path, "--version"],
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+        version_line = cmd_result.stdout.split('\n')[0] if cmd_result.stdout else "Unknown"
+        result["tesseract"] = {
+            "status": "installed",
+            "path": tesseract_path,
+            "version": version_line
+        }
+    except FileNotFoundError:
+        result["ok"] = False
+        result["tesseract"] = {
+            "status": "not_found",
+            "path": _IR_TESSERACT,
+            "error": "Tesseract binary not found"
+        }
+    except Exception as exc:
+        result["ok"] = False
+        result["tesseract"] = {
+            "status": "error",
+            "path": _IR_TESSERACT,
+            "error": str(exc)[:200]
+        }
+
+    status_code = 200 if result["ok"] else 503
+    return jsonify(result), status_code
 
 
 @app.route("/login", methods=["GET", "POST"])
