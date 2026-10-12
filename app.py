@@ -2408,9 +2408,9 @@ def fetch_indianrail_availability(train_no, frm, to, cls, quota, date_ddmmyyyy, 
         })
         r0 = s.get(_IR_HOME, timeout=25)
         if r0.status_code != 200:
-            return ("IR_HOME_HTTP_%s" % r0.status_code, "")
+            return ("HTTP %s" % r0.status_code, "")
     except Exception as e:
-        return ("IR_HOME_EXC:%s" % str(e)[:40], "")
+        return (str(e)[:180], "")
 
     last_em = ""
     tries = 14
@@ -2453,7 +2453,7 @@ def fetch_indianrail_availability(train_no, frm, to, cls, quota, date_ddmmyyyy, 
                 _time.sleep(4)
                 continue
             return (em, "")
-    return (last_em or "IR_NO_CAPTCHA", "")
+    return (last_em, "")
 
 
 def _erail_train_route(train_no, frm, to):
@@ -2510,7 +2510,8 @@ def api_train_avail(user):
         date = datetime.now(timezone(timedelta(hours=5, minutes=30))).strftime("%Y-%m-%d")
 
     status, fare = "", ""
-    ir_note = ""
+    ir_err = ""
+    er_err = ""
 
     # Try IndianRail first (localhost tesseract + Vercel remote captcha service)
     try:
@@ -2526,17 +2527,17 @@ def api_train_avail(user):
                     "fare": fare,
                     "source": "indianrail"
                 })
-            ir_note = status or "empty"
-            logger.info("⚠ IndianRail empty: train=%s note=%s", train, ir_note[:80])
+            if status:
+                ir_err = status
+            logger.info("⚠ IndianRail: train=%s msg=%s", train, ir_err[:120])
         else:
-            ir_note = "bad-date"
+            ir_err = "bad date"
     except Exception as e:
-        logger.warning("IndianRail FAILED: %s", str(e)[:100])
-        ir_note = f"exc:{str(e)[:60]}"
+        logger.warning("IndianRail FAILED: %s", str(e)[:200])
+        ir_err = str(e)[:180]
 
     # Fallback to Erail (works on both localhost and Vercel)
     logger.info("→ Trying Erail fallback for train=%s", train)
-    er_note = ""
     try:
         er_status, er_fare = _fetch_erail_availability(train, frm, to, cls, quota, date)
         if er_status and er_fare:
@@ -2547,18 +2548,21 @@ def api_train_avail(user):
                 "fare": er_fare,
                 "source": "erail"
             })
-        er_note = er_status or "empty"
-        logger.info("⚠ Erail empty: train=%s note=%s", train, er_note[:80])
+        if er_status:
+            er_err = er_status
+        logger.info("⚠ Erail: train=%s msg=%s", train, er_err[:120])
     except Exception as e:
-        logger.warning("Erail FAILED: %s", str(e)[:100])
-        er_note = f"exc:{str(e)[:60]}"
+        logger.warning("Erail FAILED: %s", str(e)[:200])
+        if not er_err:
+            er_err = str(e)[:180]
 
-    logger.warning("✗ BOTH failed for train=%s | IR=%s | ER=%s", train, ir_note[:80], er_note[:80])
+    exact = ir_err or er_err or "Not Available"
+    logger.warning("✗ BOTH failed: train=%s | IR=%s | ER=%s", train, ir_err[:120], er_err[:120])
     return jsonify({
         "success": False,
-        "status": status or "Not Available",
+        "status": exact,
         "fare": "-",
-        "error": f"IR[{ir_note[:70]}] ER[{er_note[:70]}]",
+        "error": exact,
         "source": "none"
     })
 
