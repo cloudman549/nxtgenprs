@@ -1254,6 +1254,13 @@ body.dash-body .order-list {
   align-items: end;
   margin-bottom: 10px;
 }
+.ticket-grid.train-row { grid-template-columns: 1.4fr 1.7fr 0.85fr 0.95fr 0.95fr 1.05fr; }
+@media (max-width: 900px) {
+  .ticket-grid.train-row { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+@media (max-width: 520px) {
+  .ticket-grid.train-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
 .mobile-2col { grid-template-columns: 1fr 1fr; }
 .form-avail {
   display: flex;
@@ -1338,6 +1345,8 @@ body.dash-body .order-list {
   color: var(--ink);
 }
 .pass-no { font-weight: 700; text-align: center; }
+.pass-table .p-age { max-width: 48px; }
+.pass-table .p-food { min-width: 82px; }
 
 .ticket-actions {
   display: flex;

@@ -31,7 +31,7 @@
     </div>
   </div>
 
-  <div class="ticket-grid">
+  <div class="ticket-grid train-row">
     <div class="field">
       <span>Boarding</span>
       <input type="text" id="boardingInput" placeholder="Boarding station">
@@ -46,6 +46,14 @@
       <select id="clsInput">
         <option>3A</option><option>3E</option><option>2A</option><option>1A</option>
         <option selected>SL</option><option>2S</option><option>CC</option><option>EC</option>
+      </select>
+    </div>
+    <div class="field">
+      <span>Alternative Class</span>
+      <select id="altClsInput">
+        <option value="" selected>-- None --</option>
+        <option>3A</option><option>3E</option><option>2A</option><option>1A</option>
+        <option>SL</option><option>2S</option><option>CC</option><option>EC</option>
       </select>
     </div>
     <div class="field">
@@ -84,7 +92,7 @@
     <table class="pass-table">
       <thead>
         <tr>
-          <th>#</th><th>Name</th><th>Age</th><th>Sex</th><th>Choice Birth</th>
+          <th>#</th><th>Name</th><th>Age</th><th>Sex</th><th>Food</th><th>Choice Birth</th>
         </tr>
       </thead>
       <tbody id="passengerBody"></tbody>
@@ -185,5 +193,5 @@
 {% endblock %}
 
 {% block scripts %}
-<script src="{{ url_for('static', filename='js/new_ticket.js') }}?v=51"></script>
+<script src="{{ url_for('static', filename='js/new_ticket.js') }}?v=52"></script>
 {% endblock %}

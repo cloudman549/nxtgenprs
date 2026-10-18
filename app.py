@@ -1,3 +1,4 @@
+import gzip
 import http.cookiejar
 import io
 import json
@@ -20,7 +21,7 @@ from bson import ObjectId
 from bson.errors import InvalidId
 from flask import (Flask, abort, g, jsonify, redirect, render_template, request,
                    send_file, send_from_directory, session, url_for)
-from pymongo import ASCENDING, MongoClient
+from pymongo import ASCENDING, MongoClient, UpdateOne
 from pymongo.errors import DuplicateKeyError, PyMongoError
 from werkzeug.exceptions import RequestEntityTooLarge
 from werkzeug.security import check_password_hash, generate_password_hash
@@ -94,8 +95,10 @@ app.config["MAX_CONTENT_LENGTH"] = Config.MAX_PDF_SIZE_MB * 1024 * 1024
 app.config["SESSION_COOKIE_HTTPONLY"] = Config.SESSION_COOKIE_HTTPONLY
 app.config["SESSION_COOKIE_SAMESITE"] = Config.SESSION_COOKIE_SAMESITE
 app.config["SESSION_COOKIE_SECURE"] = Config.SESSION_COOKIE_SECURE
-app.config["TEMPLATES_AUTO_RELOAD"] = True
-app.jinja_env.auto_reload = True
+# Template auto-reload sirf debug me (warna har request par template dobara compile hota hai).
+_DEBUG = os.environ.get("FLASK_DEBUG", "").strip().lower() in ("1", "true", "yes", "on")
+app.config["TEMPLATES_AUTO_RELOAD"] = _DEBUG
+app.jinja_env.auto_reload = _DEBUG
 
 if Config.SECRET_KEY.startswith("dev-only"):
     logger.warning("SECRET_KEY is using the dev fallback. Set a real value in .env before deploying.")
@@ -196,24 +199,31 @@ except Exception:
 
 
 def _backfill_expires_at():
-    """Purane PDFs (bina expires_at) ko bhi 100-din rule me lao."""
+    """Purane PDFs (bina expires_at) ko 100-din rule me lao — single bulk write."""
     try:
-        missing = pdfs_col.find({"expires_at": {"$exists": False}}, {"uploaded_at": 1})
-        count = 0
+        missing = list(pdfs_col.find({"expires_at": {"$exists": False}}, {"uploaded_at": 1}))
+        if not missing:
+            return
+        ops = []
         for doc in missing:
             base = doc.get("uploaded_at") or datetime.now(timezone.utc)
-            pdfs_col.update_one(
+            ops.append(UpdateOne(
                 {"_id": doc["_id"]},
                 {"$set": {"expires_at": base + timedelta(days=Config.PDF_RETENTION_DAYS)}},
-            )
-            count += 1
-        if count:
-            logger.info("Backfilled expires_at for %d old PDFs", count)
+            ))
+        if ops:
+            pdfs_col.bulk_write(ops, ordered=False)
+            logger.info("Backfilled expires_at for %d old PDFs", len(ops))
     except PyMongoError:
         logger.exception("Backfill expires_at failed")
 
 
-_backfill_expires_at()
+try:
+    import threading as _bthread
+
+    _bthread.Thread(target=_backfill_expires_at, daemon=True).start()
+except Exception:
+    pass
 
 # ---------------------------------------------------------------- Backblaze B2
 b2 = B2Client()
@@ -513,6 +523,39 @@ def _perf_headers(resp):
         # Short cache for API responses
         if resp.status_code == 200 and request.method == "GET":
             resp.headers["Cache-Control"] = "private, max-age=10"
+    return resp
+
+
+@app.after_request
+def _gzip_response(resp):
+    """Text/JSON/CSS/JS responses ko gzip karo (transfer size kam, page fast)."""
+    try:
+        if request.method == "HEAD":
+            return resp
+        if resp.status_code < 200 or resp.status_code >= 300:
+            return resp
+        if resp.headers.get("Content-Encoding"):
+            return resp
+        if "gzip" not in request.headers.get("Accept-Encoding", "").lower():
+            return resp
+        ctype = (resp.content_type or "").lower()
+        if not (ctype.startswith("text/") or "javascript" in ctype or "json" in ctype
+                or "xml" in ctype or "svg" in ctype or "manifest" in ctype):
+            return resp
+        if resp.direct_passthrough:
+            resp.set_data(b"".join(resp.response))
+        data = resp.get_data()
+        if len(data) < 600:
+            return resp
+        gz = gzip.compress(data, 6)
+        if len(gz) >= len(data):
+            return resp
+        resp.set_data(gz)
+        resp.headers["Content-Encoding"] = "gzip"
+        resp.headers["Content-Length"] = str(len(gz))
+        resp.headers.add("Vary", "Accept-Encoding")
+    except Exception:
+        pass
     return resp
 
 # ---------------------------------------------------------------- PDF helpers
@@ -1791,8 +1834,14 @@ def _load_trains():
         return []
 
 
-STATIONS = _load_stations()
-TRAINS = _load_trains()
+def _ensure_data_loaded():
+    """Stations/trains lazy-load — cold start par disk read avoid karta hai."""
+    global STATIONS, TRAINS
+    if STATIONS or TRAINS:
+        return
+    STATIONS = _load_stations()
+    TRAINS = _load_trains()
+    logger.info("Loaded %d stations and %d trains", len(STATIONS), len(TRAINS))
 
 
 def _load_payment_modes():
@@ -1806,7 +1855,6 @@ def _load_payment_modes():
 
 
 PAYMENT_MODES = _load_payment_modes()
-logger.info("Loaded %d stations and %d trains", len(STATIONS), len(TRAINS))
 
 
 def _serialize_ticket(doc):
@@ -1817,6 +1865,7 @@ def _serialize_ticket(doc):
         "dst": doc.get("dst", ""),
         "train": doc.get("train", ""),
         "cls": doc.get("cls", ""),
+        "alt_cls": doc.get("alt_cls", ""),
         "date": doc.get("date", ""),
         "boarding": doc.get("boarding", ""),
         "mobile": doc.get("mobile", ""),
@@ -1864,6 +1913,7 @@ def api_stations(user):
     q = (request.args.get("q") or "").strip().upper()
     if not q:
         return jsonify({"success": True, "items": []})
+    _ensure_data_loaded()
     exact, code_starts, name_starts, others = [], [], [], []
     for stn in STATIONS:
         if q not in stn:
@@ -1889,6 +1939,7 @@ def api_trains(user):
     q = (request.args.get("q") or "").strip().upper()
     if not q:
         return jsonify({"success": True, "items": []})
+    _ensure_data_loaded()
     num_starts, name_starts, others = [], [], []
     for tr in TRAINS:
         up = tr.upper()
@@ -2662,6 +2713,7 @@ def api_create_ticket(user):
         "dst": (data.get("dst") or "").strip(),
         "train": train,
         "cls": (data.get("cls") or "SL").strip(),
+        "alt_cls": (data.get("alt_cls") or "").strip(),
         "date": (data.get("date") or "").strip(),
         "boarding": (data.get("boarding") or "").strip(),
         "mobile": mobile,
@@ -2798,6 +2850,7 @@ def api_update_ticket(user, ticket_id):
         "dst": (data.get("dst") or "").strip(),
         "train": train,
         "cls": (data.get("cls") or "SL").strip(),
+        "alt_cls": (data.get("alt_cls") or "").strip(),
         "date": (data.get("date") or "").strip(),
         "boarding": (data.get("boarding") or "").strip(),
         "mobile": mobile,
@@ -2974,7 +3027,10 @@ def _build_orders_pdf(docs, label=""):
         star_pre = "<font color='#fbbf24'>&#9733; </font>" if d.get("starred") else ""
         star_ch = "\u2605 " if d.get("starred") else ""
         cls_txt = str(d.get("cls") or "").strip()
+        alt_cls = str(d.get("alt_cls") or "").strip()
         cls_w = (min(23.0, col_w - 12.0) + 6.0) if cls_txt else 0
+        if alt_cls:
+            cls_w += min(23.0, col_w - 12.0) + 6.0
         avail_w = col_w - 10
         name_avail = avail_w - _pdfmetrics.stringWidth(star_ch, _FONT_BOLD, 8.5) \
                      - _pdfmetrics.stringWidth(f"C-{num}  ", _FONT_BOLD, 8.5) \
@@ -3058,7 +3114,7 @@ def _build_orders_pdf(docs, label=""):
             except Exception:
                 ch = card_h
                 break
-        return t, cls_txt, hdr_h, ch
+        return t, cls_txt, hdr_h, ch, alt_cls
 
     docs_sorted = sorted(docs, key=lambda d: (
         str(d.get("date") or "").strip(),
@@ -3088,7 +3144,7 @@ def _build_orders_pdf(docs, label=""):
                           f"Page {page_no} of {total_pages}")
         c.restoreState()
 
-    def _draw_card(t, col, row, num, cls_txt="", hdr_h=23.0, ch=None):
+    def _draw_card(t, col, row, num, cls_txt="", hdr_h=23.0, ch=None, alt_cls=""):
         x = left_m + col * (col_w + gap)
         y_top = page_h - top_m - row * (card_h + gap)
         y_bot = y_top - card_h
@@ -3112,33 +3168,48 @@ def _build_orders_pdf(docs, label=""):
             t.drawOn(c, x, y_top - ch)
         c.restoreState()
 
+        def _badge(cx, cy, dia, label, fill_hex, text_hex):
+            c.saveState()
+            c.setFillColor(colors.HexColor(fill_hex))
+            c.setStrokeColor(colors.white)
+            c.setLineWidth(0.8)
+            c.circle(cx, cy, dia / 2.0, stroke=1, fill=1)
+            fs = dia * 0.6
+            while fs > 3.0 and _pdfmetrics.stringWidth(label, _FONT_BOLD, fs) > dia * 1.1:
+                fs -= 0.3
+            c.setFillColor(colors.HexColor(text_hex))
+            c.setFont(_FONT_BOLD, fs)
+            c.drawCentredString(cx, cy - fs * 0.35, label)
+            c.restoreState()
+
         if cls_txt:
             band_h = hdr_h * scale
-            dia = min(band_h - 2.0, col_w - 12.0)
+            avail_w = col_w - 12.0
+            gap_b = 1.5
+            if alt_cls:
+                dia = min(band_h - 2.0, (avail_w - gap_b) / 1.7)
+            else:
+                dia = min(band_h - 2.0, avail_w)
             if dia > 6:
-                cx = x + col_w - 5.0 - dia / 2.0
                 cy = y_top - 2.0 - band_h / 2.0
-                c.saveState()
-                c.setFillColor(colors.HexColor("#dc2626"))
-                c.setStrokeColor(colors.HexColor("#ffffff"))
-                c.setLineWidth(0.8)
-                c.circle(cx, cy, dia / 2.0, stroke=1, fill=1)
-                fs = dia * 0.6
-                while fs > 3.0 and _pdfmetrics.stringWidth(cls_txt, _FONT_BOLD, fs) > dia * 1.1:
-                    fs -= 0.3
-                c.setFillColor(colors.white)
-                c.setFont(_FONT_BOLD, fs)
-                c.drawCentredString(cx, cy - fs * 0.35, cls_txt)
-                c.restoreState()
+                if alt_cls:
+                    dia_alt = dia * 0.7
+                    cx_alt = x + col_w - 5.0 - dia_alt / 2.0
+                    cx_main = cx_alt - dia_alt / 2.0 - gap_b - dia / 2.0
+                    _badge(cx_main, cy, dia, cls_txt, "#dc2626", "#ffffff")
+                    _badge(cx_alt, cy, dia_alt, alt_cls, "#fbbf24", "#78350f")
+                else:
+                    cx = x + col_w - 5.0 - dia / 2.0
+                    _badge(cx, cy, dia, cls_txt, "#dc2626", "#ffffff")
 
     page_no = 1
     for start in range(0, n, grid_x * grid_y):
         page_docs = docs_sorted[start:start + grid_x * grid_y]
         _draw_header(page_no)
         for idx, doc in enumerate(page_docs):
-            t, cls_txt, hdr_h, ch = _card(doc, start + idx + 1)
+            t, cls_txt, hdr_h, ch, alt_cls = _card(doc, start + idx + 1)
             row_i, col_i = divmod(idx, grid_x)
-            _draw_card(t, col_i, row_i, start + idx + 1, cls_txt, hdr_h, ch)
+            _draw_card(t, col_i, row_i, start + idx + 1, cls_txt, hdr_h, ch, alt_cls)
         page_no += 1
         c.showPage()
     c.save()

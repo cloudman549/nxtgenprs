@@ -13,6 +13,7 @@
   var findTrainBtn = document.getElementById("findTrainBtn");
   var dateInput = document.getElementById("dateInput");
   var clsInput = document.getElementById("clsInput");
+  var altClsInput = document.getElementById("altClsInput");
   var quotaInput = document.getElementById("quotaInput");
   var payModeInput = document.getElementById("payModeInput");
   var altMobileInput = document.getElementById("altMobileInput");
@@ -68,11 +69,14 @@
 
   // ---------------- Passenger rows ----------------
   var sexOpts = ["M", "F", "T"];
-  var berthOpts = ["LB", "MB", "UB", "SL", "SU"];
+  var berthOpts = [["LB", "LB"], ["MB", "MB"], ["UB", "UB"], ["SL", "SL"], ["SU", "SU"], ["NB", "No Berth"]];
+  var foodOpts = [["No Food", "No Food"], ["Veg", "Veg"], ["Non-Veg", "Non-Veg"]];
 
   function opts(list) {
     return list.map(function (v) {
-      return '<option value="' + v + '">' + (v || "-") + "</option>";
+      var val = Array.isArray(v) ? v[0] : v;
+      var lbl = Array.isArray(v) ? v[1] : (v || "-");
+      return '<option value="' + val + '">' + lbl + "</option>";
     }).join("");
   }
 
@@ -87,6 +91,7 @@
       '<td><input type="text" class="p-name" placeholder="Name" autocapitalize="characters" autocorrect="off"></td>' +
       '<td><input type="text" class="p-age" maxlength="3" placeholder="Age"></td>' +
       '<td><select class="p-gender">' + opts(sexOpts) + "</select></td>" +
+      '<td><select class="p-food">' + opts(foodOpts) + "</select></td>" +
       '<td><select class="p-berth">' + opts(berthOpts) + "</select></td>";
     body.appendChild(tr);
   }
@@ -173,6 +178,7 @@
     if (t.train) trainInput.value = t.train.toUpperCase();
     if (t.boarding) boardingInput.value = t.boarding;
     if (t.cls) setClass(t.cls);
+    if (altClsInput) altClsInput.value = t.alt_cls || "";
     if (t.quota) quotaInput.value = t.quota;
     if (t.train_type) trainTypeInput.value = t.train_type;
     if (t.mobile) mobileInput.value = t.mobile;
@@ -200,13 +206,14 @@
     var body = document.getElementById("passengerBody");
     var rows = body.querySelectorAll("tr");
     var gmap = { M: "M", F: "F", T: "T", Male: "M", Female: "F", Transgender: "T" };
-    var bmap = { LB: "LB", MB: "MB", UB: "UB", SL: "SL", SU: "SU", Lower: "LB", Middle: "MB", Upper: "UB", "Side Lower": "SL", "Side Upper": "SU" };
+    var bmap = { LB: "LB", MB: "MB", UB: "UB", SL: "SL", SU: "SU", NB: "NB", Lower: "LB", Middle: "MB", Upper: "UB", "Side Lower": "SL", "Side Upper": "SU", "No Berth": "NB" };
     (t.passengers || []).forEach(function (p, i) {
       var tr = rows[i];
       if (!tr) return;
       tr.querySelector(".p-name").value = p.name || "";
       tr.querySelector(".p-age").value = p.age || "";
       tr.querySelector(".p-gender").value = gmap[p.gender] || (sexOpts.indexOf(p.gender) !== -1 ? p.gender : "M");
+      tr.querySelector(".p-food").value = p.food || "No Food";
       tr.querySelector(".p-berth").value = bmap[p.berth] || p.berth || "LB";
     });
 
@@ -563,6 +570,7 @@
         name: name,
         age: tr.querySelector(".p-age").value.trim(),
         gender: tr.querySelector(".p-gender").value,
+        food: tr.querySelector(".p-food").value,
         berth: tr.querySelector(".p-berth").value
       });
     });
@@ -584,6 +592,7 @@
     rupeeSign.classList.add("hidden");
     quotaInput.value = "GN";
     setClass("SL");
+    if (altClsInput) altClsInput.value = "";
     trainTypeInput.value = "";
     var d = new Date();
     d.setDate(d.getDate() + 1);
@@ -616,6 +625,7 @@
       dst: dstInput.value.trim(),
       train: trainInput.value.trim(),
       cls: clsInput.value,
+      alt_cls: altClsInput ? altClsInput.value : "",
       date: dateInput.value,
       boarding: boardingInput.value.trim(),
       quota: quotaInput.value,
