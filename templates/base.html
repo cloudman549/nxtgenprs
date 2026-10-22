@@ -11,7 +11,7 @@
   <style>
     body { font-family: 'Plus Jakarta Sans', system-ui, -apple-system, 'Segoe UI', Roboto, Arial, sans-serif; }
   </style>
-  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}?v=68">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}?v=69">
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="icon" href="{{ url_for('static', filename='nxtgen.png') }}">
   <link rel="apple-touch-icon" sizes="180x180" href="{{ url_for('static', filename='apple-touch-icon.png') }}">
@@ -158,7 +158,7 @@
     })();
   </script>
   {% if session.get('user_id') %}
-  <script src="{{ url_for('static', filename='js/chat.js') }}?v=54"></script>
+  <script src="{{ url_for('static', filename='js/chat.js') }}?v=55"></script>
   {% endif %}
   <script src="{{ url_for('static', filename='js/install.js') }}?v=2"></script>
 </body>

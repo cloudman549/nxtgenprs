@@ -716,10 +716,19 @@ if (d.success) {
   });
 
   var interval = null;
-  pollNow();
-  interval = setInterval(pollNow, 3000);
+  function startPoll() {
+    if (interval) return;
+    pollNow();
+    interval = setInterval(function () {
+      if (!document.hidden) pollNow();
+    }, 5000);
+  }
+  function stopPoll() {
+    if (interval) { clearInterval(interval); interval = null; }
+  }
+  startPoll();
   document.addEventListener("visibilitychange", function () {
-    if (!document.hidden) pollNow();
+    if (document.hidden) { stopPoll(); } else { startPoll(); }
   });
   window.addEventListener("focus", pollNow);
 })();

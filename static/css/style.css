@@ -1543,7 +1543,7 @@ body.dash-body .order-list {
   resize: vertical;
 }
 .bulk-textarea { min-height: 180px; }
-.notepad-textarea { min-height: 420px; line-height: 1.6; }
+.notepad-textarea { min-height: 140px; line-height: 1.6; }
 .bulk-textarea:focus, .notepad-textarea:focus { outline: none; border-color: var(--brand); }
 .notepad-foot {
   display: flex;
@@ -1559,6 +1559,50 @@ body.dash-body .order-list {
   font-size: 0.85rem;
   font-weight: 600;
 }
+.notepad-count { font-size: 0.85rem; }
+.notepad-list { display: flex; flex-direction: column; gap: 10px; }
+.note-item {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: var(--card);
+}
+.note-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.note-author { font-weight: 700; color: var(--brand); }
+.note-time { color: var(--muted); font-size: 0.78rem; }
+.note-actions { margin-left: auto; display: inline-flex; gap: 6px; }
+.note-btn {
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--ink);
+  border-radius: 8px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  padding: 3px 9px;
+  cursor: pointer;
+}
+.note-btn:hover { border-color: var(--brand); }
+.note-del:hover { border-color: #dc2626; color: #dc2626; }
+.note-text { white-space: pre-wrap; word-break: break-word; line-height: 1.5; }
+.note-edit-area {
+  width: 100%;
+  border: 1px solid var(--brand);
+  border-radius: 8px;
+  background: var(--card);
+  color: var(--ink);
+  font-family: inherit;
+  font-size: 0.95rem;
+  padding: 8px 10px;
+  min-height: 80px;
+  resize: vertical;
+}
+.note-edit-row { display: flex; gap: 8px; margin-top: 8px; }
+.note-empty { padding: 14px 4px; }
 .user-actions { display: flex; align-items: center; gap: 8px; }
 
 /* ============================================================ Topbar actions & hamburger */
@@ -1656,7 +1700,7 @@ html { -webkit-text-size-adjust: 100%; }
   .auth-card { padding: 24px 18px; }
   .user-row { flex-wrap: wrap; }
   .user-email { max-width: 100%; }
-  .notepad-textarea { min-height: 260px; }
+  .notepad-textarea { min-height: 120px; }
   .toast-wrap { left: 12px; right: 12px; bottom: 12px; }
   .toast { max-width: none; }
 

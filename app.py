@@ -133,6 +133,9 @@ fresh_ids_col = db["fresh_ids"]
 
 notepad_col = db["notepad"]
 
+# Shared team notes board (sabki dikhti hain, author tag ke saath).
+notes_col = db["notepad_notes"]
+
 chat_col = db["chat_messages"]
 try:
     chat_col.create_index("ts")
@@ -177,25 +180,45 @@ def _init_db():
         fresh_ids_col.create_index([("user_id", ASCENDING)], unique=False)
     except PyMongoError as exc:
         logger.warning("Index 'fresh_ids.user_id' not created: %s", exc)
+    try:
+        notes_col.create_index([("created_at", ASCENDING)], unique=False)
+    except PyMongoError as exc:
+        logger.warning("Index 'notes.created_at' not created: %s", exc)
 
 
-_init_db()
+def _init_db_more():
+    """Bhaari/optional indexes — call-members, call-signals, shares, etc."""
+    for coll, keys, kw in (
+        (call_members_col, [("user_id", ASCENDING), ("room", ASCENDING)], {"unique": True}),
+        (call_members_col, [("room", ASCENDING), ("last_seen", ASCENDING)], {}),
+        (call_signals_col, [("room", ASCENDING), ("_id", ASCENDING)], {}),
+        (pdfs_col, [("share_token", ASCENDING)], {"sparse": True}),
+        (fresh_ids_col, [("created_at", ASCENDING)], {}),
+        (tickets_col, [("user_id", ASCENDING), ("created_at", ASCENDING)], {}),
+    ):
+        try:
+            coll.create_index(keys, **kw)
+        except PyMongoError as exc:
+            logger.warning("Index %s not created: %s", keys, exc)
 
 
 def _warm_mongo_background():
+    """Import ko block kiye bina Mongo warm-up + DB init + admin bootstrap."""
     try:
         _prime_mongo()
         logger.info("Mongo pool warmed")
     except Exception:
         logger.warning("Mongo warm-up skipped")
-
-
-try:
-    import threading as _threading
-
-    _threading.Thread(target=_warm_mongo_background, daemon=True).start()
-except Exception:
-    pass
+    try:
+        _init_db()
+        _init_db_more()
+        logger.info("DB indexes ensured")
+    except Exception:
+        logger.exception("DB init failed")
+    try:
+        _bootstrap_admin()
+    except Exception:
+        logger.exception("Bootstrap admin failed")
 
 
 def _backfill_expires_at():
@@ -252,10 +275,7 @@ def _bootstrap_admin():
     logger.info("Bootstrap admin created: %s", Config.ADMIN_USERNAME)
 
 
-try:
-    _bootstrap_admin()
-except PyMongoError:
-    logger.exception("Could not bootstrap admin user (is MongoDB reachable?)")
+# (DB init + admin bootstrap ab background warm thread me — neeche start hota hai)
 
 # ---------------------------------------------------------------- Helpers
 _CACHE = {}
@@ -2381,7 +2401,7 @@ def _ir_solve_captcha_remote(png):
     bg.save(buf, format="PNG")
     payload = {"image": base64.b64encode(buf.getvalue()).decode("ascii")}
     try:
-        r = requests.post(_IR_CAPTCHA_SVC, json=payload, timeout=25)
+        r = requests.post(_IR_CAPTCHA_SVC, json=payload, timeout=8)
         if r.status_code == 200:
             j = r.json()
             if j.get("success") and j.get("answer") is not None:
@@ -2404,14 +2424,16 @@ def _ir_solve_captcha(session):
         png = session.get(f"https://www.indianrail.gov.in/enquiry/captchaDraw.png?t={int(time.time() * 1000)}", timeout=20).content
     except Exception:
         return ""
+    # 1) Local pure solver (fast, no third-party, Vercel par bhi chalta hai)
     try:
-        ans = _ir_solve_captcha_remote(png)
+        ans = _ir_solve_captcha_pure(png)
         if ans:
             return ans
     except Exception:
         pass
+    # 2) Remote solver — sirf tab jab pure fail ho (fallback)
     try:
-        ans = _ir_solve_captcha_pure(png)
+        ans = _ir_solve_captcha_remote(png)
         if ans:
             return ans
     except Exception:
@@ -3654,42 +3676,107 @@ def dashboard(user):
     return render_template("dashboard.html", user=user)
 
 
+def _serialize_note(doc, user):
+    author_id = doc.get("author_id", "")
+    return {
+        "id": str(doc["_id"]),
+        "author": doc.get("author_name", ""),
+        "author_id": author_id,
+        "text": doc.get("text", ""),
+        "created_at": doc.get("created_at").isoformat() if hasattr(doc.get("created_at"), "isoformat") else "",
+        "edited": bool(doc.get("edited_by")),
+        "edited_by": doc.get("edited_by", ""),
+        "mine": author_id == str((user or {}).get("_id", "")),
+    }
+
+
 @app.route("/api/notepad", methods=["GET"])
 def api_get_notepad():
     user = get_current_user()
     if user is None:
         return jsonify({"success": False, "error": "login-required"}), 401
-    doc = notepad_col.find_one({"user_id": str(user["_id"])})
+    docs = list(notes_col.find({}).sort("created_at", ASCENDING).limit(500))
     return jsonify({
         "success": True,
-        "content": (doc or {}).get("content", ""),
-        "updated_at": (doc or {}).get("updated_at"),
+        "me_id": str(user["_id"]),
+        "notes": [_serialize_note(d, user) for d in docs],
     })
 
 
 @app.route("/api/notepad", methods=["POST"])
 @csrf_protected
 def api_save_notepad():
-    data = request.get_json(silent=True) or request.form
-    content = data.get("content") or ""
     user = get_current_user()
-    if user is not None:
-        filter_q = {"user_id": str(user["_id"])}
-    else:
-        device = (data.get("device") or "").strip()
-        if not device or len(device) > 64:
-            return jsonify({"success": False, "error": "Device id missing."}), 400
-        filter_q = {"_id": device}
+    if user is None:
+        return jsonify({"success": False, "error": "login-required"}), 401
+    data = request.get_json(silent=True) or request.form
+    text = (data.get("text") or data.get("content") or "").strip()
+    if not text:
+        return jsonify({"success": False, "error": "Kuch likho."}), 400
+    if len(text) > 2000:
+        return jsonify({"success": False, "error": "2000 characters se chhota rakho."}), 400
+    doc = {
+        "author_id": str(user["_id"]),
+        "author_name": user.get("username", ""),
+        "text": text,
+        "created_at": datetime.now(timezone.utc),
+    }
     try:
-        notepad_col.update_one(
-            filter_q,
-            {"$set": {"content": content, "updated_at": datetime.now(timezone.utc)}},
-            upsert=True,
-        )
+        result = notes_col.insert_one(doc)
     except PyMongoError:
-        logger.exception("Could not save notepad")
-        return jsonify({"success": False, "error": "Notepad save nahi hua."}), 500
-    return jsonify({"success": True, "message": "Saved."})
+        logger.exception("Could not save note")
+        return jsonify({"success": False, "error": "Note save nahi hua."}), 500
+    doc["_id"] = result.inserted_id
+    return jsonify({"success": True, "note": _serialize_note(doc, user)}), 201
+
+
+@app.route("/api/notepad/<note_id>", methods=["PUT"])
+@csrf_protected
+def api_edit_notepad(note_id):
+    user = get_current_user()
+    if user is None:
+        return jsonify({"success": False, "error": "login-required"}), 401
+    data = request.get_json(silent=True) or request.form
+    text = (data.get("text") or "").strip()
+    if not text:
+        return jsonify({"success": False, "error": "Kuch likho."}), 400
+    if len(text) > 2000:
+        return jsonify({"success": False, "error": "2000 characters se chhota rakho."}), 400
+    try:
+        oid = ObjectId(note_id)
+    except (InvalidId, TypeError):
+        return jsonify({"success": False, "error": "Galat note id."}), 400
+    try:
+        notes_col.update_one(
+            {"_id": oid},
+            {"$set": {"text": text, "edited_by": user.get("username", ""),
+                      "updated_at": datetime.now(timezone.utc)}},
+        )
+        doc = notes_col.find_one({"_id": oid})
+    except PyMongoError:
+        logger.exception("Could not edit note")
+        return jsonify({"success": False, "error": "Edit nahi hua."}), 500
+    if not doc:
+        return jsonify({"success": False, "error": "Note nahi mila."}), 404
+    return jsonify({"success": True, "note": _serialize_note(doc, user)})
+
+
+@app.route("/api/notepad/<note_id>", methods=["DELETE"])
+@csrf_protected
+def api_delete_notepad(note_id):
+    user = get_current_user()
+    if user is None:
+        return jsonify({"success": False, "error": "login-required"}), 401
+    try:
+        oid = ObjectId(note_id)
+    except (InvalidId, TypeError):
+        return jsonify({"success": False, "error": "Galat note id."}), 400
+    try:
+        notes_col.delete_one({"_id": oid})
+    except PyMongoError:
+        logger.exception("Could not delete note")
+        return jsonify({"success": False, "error": "Delete nahi hua."}), 500
+    return jsonify({"success": True})
 
 
 # ---------------------------------------------------------------- CLI command
@@ -3765,6 +3852,15 @@ def add_security_headers(response):
     response.headers.setdefault("X-Frame-Options", "DENY")
     response.headers.setdefault("Referrer-Policy", "same-origin")
     return response
+
+
+# ---------------------------------------------------------------- Warm-up (non-blocking)
+try:
+    import threading as _threading
+
+    _threading.Thread(target=_warm_mongo_background, daemon=True).start()
+except Exception:
+    pass
 
 
 # ---------------------------------------------------------------- Entry point
