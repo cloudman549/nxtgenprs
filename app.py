@@ -1984,7 +1984,7 @@ _UACHROME = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
              "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
 _IR_LOCK = threading.Lock()
 _IR_LAST_CALL = 0.0
-_IR_MIN_GAP = 1.0
+_IR_MIN_GAP = 0.25
 
 
 def _ir_wait():
@@ -2528,18 +2528,18 @@ def fetch_indianrail_availability(train_no, frm, to, cls, quota, date_ddmmyyyy, 
             "Referer": _IR_HOME,
             "Accept-Language": "en-US,en;q=0.9",
         })
-        r0 = s.get(_IR_HOME, timeout=25)
+        r0 = s.get(_IR_HOME, timeout=10)
         if r0.status_code != 200:
             return ("HTTP %s" % r0.status_code, "")
     except Exception as e:
         return (str(e)[:180], "")
 
     last_em = ""
-    tries = 14
+    tries = 5
     for attempt in range(1, tries + 1):
         ans = _ir_solve_captcha(s)
         if not ans:
-            _time.sleep(0.3)
+            _time.sleep(0.15)
             continue
         try:
             ps = {
@@ -2559,7 +2559,7 @@ def fetch_indianrail_availability(train_no, frm, to, cls, quota, date_ddmmyyyy, 
             j = s.get(_IR_API_URL, params=ps, timeout=30).json()
         except Exception:
             if attempt < tries:
-                _time.sleep(0.5)
+                _time.sleep(0.2)
             continue
         em = (j.get("errorMessage") or "").strip()
         avl = j.get("avlDayList") or []
@@ -2569,10 +2569,10 @@ def fetch_indianrail_availability(train_no, frm, to, cls, quota, date_ddmmyyyy, 
             last_em = em
             low = em.lower()
             if "captcha" in low or "session" in low:
-                _time.sleep(0.4)
+                _time.sleep(0.15)
                 continue
             if "invalid facnam" in low or "facnam" in low or "server id" in low or "temporary" in low:
-                _time.sleep(4)
+                _time.sleep(1.5)
                 continue
             return (em, "")
     return (last_em, "")
@@ -2608,6 +2608,29 @@ def _erail_train_route(train_no, frm, to):
     return None
 
 
+_AVAIL_CACHE = {}
+_AVAIL_CACHE_MAX = 800
+_AVAIL_CACHE_OK_TTL = 300
+_AVAIL_CACHE_FAIL_TTL = 45
+
+
+def _avail_cache_get(key):
+    ent = _AVAIL_CACHE.get(key)
+    if not ent:
+        return None
+    val, ts, ttl = ent
+    if time.time() - ts > ttl:
+        _AVAIL_CACHE.pop(key, None)
+        return None
+    return val
+
+
+def _avail_cache_put(key, val, ttl):
+    if len(_AVAIL_CACHE) >= _AVAIL_CACHE_MAX:
+        _AVAIL_CACHE.clear()
+    _AVAIL_CACHE[key] = (val, time.time(), ttl)
+
+
 @app.route("/api/train-avail")
 @login_required
 def api_train_avail(user):
@@ -2624,69 +2647,85 @@ def api_train_avail(user):
     if not train or not frm or not to:
         return jsonify({"success": False, "error": "Train, From aur To chahiye."}), 400
 
-    route = _erail_train_route(train, frm, to)
-    if route:
-        frm, to, ttype = route
-
     if not date:
         date = datetime.now(timezone(timedelta(hours=5, minutes=30))).strftime("%Y-%m-%d")
 
-    status, fare = "", ""
+    cache_key = (train, frm, to, cls, quota, date)
+    cached = _avail_cache_get(cache_key)
+    if cached is not None:
+        out = dict(cached)
+        out["cached"] = True
+        return jsonify(out)
+
     ir_err = ""
     er_err = ""
 
-    # Try IndianRail first (localhost tesseract + Vercel remote captcha service)
-    try:
-        p = date.split("-")
-        if len(p) == 3:
+    date_ddmmyyyy = ""
+    p = date.split("-")
+    if len(p) == 3:
+        try:
             date_ddmmyyyy = f"{int(p[2]):02d}-{int(p[1]):02d}-{p[0]}"
-            status, fare = fetch_indianrail_availability(train, frm, to, cls, quota, date_ddmmyyyy, ttype)
-            if status and fare:
-                logger.info("✓ IndianRail SUCCESS: train=%s, status=%s, fare=%s", train, status, fare)
-                return jsonify({
-                    "success": True,
-                    "status": status,
-                    "fare": fare,
-                    "source": "indianrail"
-                })
-            if status:
-                ir_err = status
-            logger.info("⚠ IndianRail: train=%s msg=%s", train, ir_err[:120])
-        else:
-            ir_err = "bad date"
-    except Exception as e:
-        logger.warning("IndianRail FAILED: %s", str(e)[:200])
-        ir_err = str(e)[:180]
+        except Exception:
+            date_ddmmyyyy = ""
 
-    # Fallback to Erail (works on both localhost and Vercel)
-    logger.info("→ Trying Erail fallback for train=%s", train)
-    try:
-        er_status, er_fare = _fetch_erail_availability(train, frm, to, cls, quota, date)
-        if er_status and er_fare:
-            logger.info("✓ Erail SUCCESS: train=%s, status=%s, fare=%s", train, er_status, er_fare)
-            return jsonify({
-                "success": True,
-                "status": er_status,
-                "fare": er_fare,
-                "source": "erail"
-            })
-        if er_status:
-            er_err = er_status
-        logger.info("⚠ Erail: train=%s msg=%s", train, er_err[:120])
-    except Exception as e:
-        logger.warning("Erail FAILED: %s", str(e)[:200])
-        if not er_err:
-            er_err = str(e)[:180]
+    def _try_erail():
+        try:
+            return _fetch_erail_availability(train, frm, to, cls, quota, date)
+        except Exception as e:
+            logger.warning("Erail FAILED: %s", str(e)[:200])
+            return ("", "")
+
+    def _try_ir():
+        if not date_ddmmyyyy:
+            return ("", "")
+        try:
+            return fetch_indianrail_availability(train, frm, to, cls, quota, date_ddmmyyyy, ttype)
+        except Exception as e:
+            logger.warning("IndianRail FAILED: %s", str(e)[:200])
+            return (str(e)[:180], "")
+
+    # 1) Primary — IndianRail (official availability + fare; pure captcha solver ~1s)
+    status, fare = _try_ir()
+    if status and fare:
+        logger.info("✓ IndianRail SUCCESS: train=%s, status=%s, fare=%s", train, status, fare)
+        out = {"success": True, "status": status, "fare": fare, "source": "indianrail"}
+        _avail_cache_put(cache_key, out, _AVAIL_CACHE_OK_TTL)
+        return jsonify(out)
+    if status:
+        ir_err = status
+
+    # 2) Fallback — eRail (no captcha)
+    er_status, er_fare = _try_erail()
+    if er_status and er_fare:
+        logger.info("✓ Erail SUCCESS: train=%s, status=%s, fare=%s", train, er_status, er_fare)
+        out = {"success": True, "status": er_status, "fare": er_fare, "source": "erail"}
+        _avail_cache_put(cache_key, out, _AVAIL_CACHE_OK_TTL)
+        return jsonify(out)
+    if er_status:
+        er_err = er_status
+
+    # 3) Last resort — station code galat ho sakta hai: erail se resolve karke retry
+    route = _erail_train_route(train, frm, to)
+    if route and (route[0] != frm or route[1] != to):
+        frm, to, ttype = route
+        er_status2, er_fare2 = _try_erail()
+        if er_status2 and er_fare2:
+            out = {"success": True, "status": er_status2, "fare": er_fare2, "source": "erail"}
+            _avail_cache_put(cache_key, out, _AVAIL_CACHE_OK_TTL)
+            return jsonify(out)
+        status2, fare2 = _try_ir()
+        if status2 and fare2:
+            out = {"success": True, "status": status2, "fare": fare2, "source": "indianrail"}
+            _avail_cache_put(cache_key, out, _AVAIL_CACHE_OK_TTL)
+            return jsonify(out)
+        er_err = er_status2 or er_err
+        ir_err = status2 or ir_err
 
     exact = ir_err or er_err or "Not Available"
     logger.warning("✗ BOTH failed: train=%s | IR=%s | ER=%s", train, ir_err[:120], er_err[:120])
-    return jsonify({
-        "success": False,
-        "status": exact,
-        "fare": "-",
-        "error": exact,
-        "source": "none"
-    })
+    out = {"success": False, "status": exact, "fare": "-", "error": exact, "source": "none"}
+    _avail_cache_put(cache_key, out, _AVAIL_CACHE_FAIL_TTL)
+    return jsonify(out)
 
 
 @app.route("/api/tickets", methods=["GET"])
