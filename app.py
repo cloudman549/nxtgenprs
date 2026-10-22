@@ -2976,11 +2976,11 @@ def _build_orders_pdf(docs, label=""):
                         textColor=colors.HexColor("#64748b"))
     hDR = ParagraphStyle("hDR", fontName=_FONT_BOLD, fontSize=8.5, leading=10,
                          textColor=colors.white)
-    paxHD = ParagraphStyle("pHD", fontName=_FONT_BOLD, fontSize=6.5, leading=8,
+    paxHD = ParagraphStyle("pHD", fontName=_FONT_BOLD, fontSize=5.5, leading=7,
                            textColor=colors.HexColor("#1e3a8a"), alignment=1)
     paxNM = ParagraphStyle("pNM", fontName=_FONT_NORMAL, fontSize=7, leading=8.4,
                            textColor=colors.HexColor("#0f172a"))
-    paxCE = ParagraphStyle("pCE", fontName=_FONT_NORMAL, fontSize=6.5, leading=8,
+    paxCE = ParagraphStyle("pCE", fontName=_FONT_NORMAL, fontSize=5.5, leading=7,
                            textColor=colors.HexColor("#334155"), alignment=1)
 
     def _jdate(dt_str):
@@ -3052,22 +3052,37 @@ def _build_orders_pdf(docs, label=""):
         desc = str(d.get("desc") or "").strip()
 
         pax = d.get("passengers") or []
-        pax_rows = [
-            [Paragraph("NAME", paxHD), Paragraph("AGE", paxHD),
-             Paragraph("GENDER", paxHD), Paragraph("BERTH", paxHD)]
-        ]
+        show_food = any(
+            (str(p.get("food") or "").strip() not in ("", "No Food"))
+            for p in pax
+        )
+        pax_hdr = [Paragraph("NAME", paxHD), Paragraph("AGE", paxHD),
+                   Paragraph("SEX", paxHD), Paragraph("BERTH", paxHD)]
+        if show_food:
+            pax_hdr.append(Paragraph("FOOD", paxHD))
+        pax_rows = [pax_hdr]
         for p in pax[:6]:
-            pax_rows.append([
+            row = [
                 Paragraph(f"<b>{_pdf_esc(str(p.get('name') or '-'))}</b>", paxNM),
                 Paragraph(_pdf_esc(str(p.get('age') or '-')), paxCE),
                 Paragraph(_pdf_esc(str(p.get('gender') or '-')), paxCE),
                 Paragraph(_pdf_esc(str(p.get('berth') or '-')), paxCE),
-            ])
+            ]
+            if show_food:
+                row.append(Paragraph(_pdf_esc(str(p.get('food') or '-')), paxCE))
+            pax_rows.append(row)
+        ncols = 5 if show_food else 4
         while len(pax_rows) < 7:
-            pax_rows.append(["", "", "", ""])
-        pax_name_w = max(col_w - 18 - (22 + 26 + 30), 66)
+            pax_rows.append([""] * ncols)
+        if show_food:
+            food_w = 29
+            pax_name_w = max(col_w - 18 - (16 + 15 + 22 + food_w), 62)
+            pax_cols = [pax_name_w, 16, 15, 22, food_w]
+        else:
+            pax_name_w = max(col_w - 18 - (16 + 15 + 22), 66)
+            pax_cols = [pax_name_w, 16, 15, 22]
         paxbox = Table(pax_rows,
-                       colWidths=[pax_name_w, 22, 26, 30])
+                       colWidths=pax_cols)
         paxbox.setStyle(TableStyle([
             ("FONTNAME", (0, 0), (-1, -1), _FONT_NORMAL),
             ("BOX", (0, 0), (-1, -1), 0.9, colors.HexColor("#1d4ed8")),
