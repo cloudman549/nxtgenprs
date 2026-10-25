@@ -663,9 +663,20 @@
     grid4.appendChild(formField("Payment", t.pay === "Advanced" ? "Advanced Paid" : "Unpaid"));
     grid4.appendChild(formField("Total", t.total ? "Rs" + t.total : "-"));
     grid4.appendChild(formField("Advanced Paid", t.pay === "Advanced" && t.adv_amount ? "Rs" + t.adv_amount : "-"));
-    grid4.appendChild(formField("Due", dueOf(t)));
+    grid4.appendChild(formField(t.failed ? "Due (cancelled)" : "Due", dueOf(t)));
     grid4.appendChild(formField("Description", t.desc));
     body.appendChild(grid4);
+
+    if (t.failed) {
+      var gridFail = document.createElement("div");
+      gridFail.className = "pop-grid";
+      gridFail.appendChild(formField("Status", "FAILED / CANCELLED"));
+      gridFail.appendChild(formField("Failed On", t.failed_date || "-"));
+      gridFail.appendChild(formField("Return Amount", t.refund_amount !== "" && t.refund_amount != null ? "Rs" + t.refund_amount : "-"));
+      gridFail.appendChild(formField("Return Mode", t.refund_mode || "-"));
+      if (t.refund_note) gridFail.appendChild(formField("Return Note", t.refund_note));
+      body.appendChild(gridFail);
+    }
 
     var av = t.avail_info || {};
     if (av.fare || av.status) {
@@ -717,6 +728,13 @@
       ["Due", dueOf(t)],
       ["Description", t.desc]
     ];
+    if (t.failed) {
+      pairs.push(["Status", "FAILED / CANCELLED"]);
+      pairs.push(["Failed On", t.failed_date || "-"]);
+      pairs.push(["Return Amount", t.refund_amount !== "" && t.refund_amount != null ? "Rs" + t.refund_amount : "-"]);
+      pairs.push(["Return Mode", t.refund_mode || "-"]);
+      if (t.refund_note) pairs.push(["Return Note", t.refund_note]);
+    }
     if (t.emp_name) pairs.splice(1, 0, ["Order Receiver", t.emp_name]);
     pairs.forEach(function (p) { box.appendChild(fieldRow(p[0], p[1])); });
 
@@ -742,7 +760,8 @@
 
   function orderRow(t, num) {
     var row = document.createElement("div");
-    row.className = "order-row" + (t.booked ? " booked" : "") + (t.starred ? " starred" : "");
+    row.className = "order-row" + (t.booked ? " booked" : "") + (t.starred ? " starred" : "")
+      + (t.failed ? " failed" : "");
 
     var head = document.createElement("div");
     head.className = "order-head";
@@ -752,6 +771,12 @@
     var title = document.createElement("div");
     title.className = "order-title";
     title.textContent = (t.starred ? "\u2605 " : "") + "CARD-" + num + "-" + (t.t_name || "TICKET");
+    if (t.failed) {
+      var failChip = document.createElement("span");
+      failChip.className = "tag-failed";
+      failChip.textContent = "FAILED";
+      title.appendChild(failChip);
+    }
     main.appendChild(title);
     var meta = document.createElement("div");
     meta.className = "order-meta muted";
@@ -950,17 +975,42 @@
     });
   }
 
-  // ---------------- Revenue (A4 hisab kitab) ----------------
+  // ---------------- Revenue (A4 hisab kitab + accept due) ----------------
   var ledgerPaper = document.getElementById("ledgerPaper");
   var revDateFilter = document.getElementById("revDateFilter");
   var revCustomDate = document.getElementById("revCustomDate");
   var revCustomWrap = document.getElementById("revCustomWrap");
   var revNote = document.getElementById("revNote");
   var revRefreshBtn = document.getElementById("revRefreshBtn");
+  var revDueBtn = document.getElementById("revDueBtn");
   var revPdfBtn = document.getElementById("revPdfBtn");
   var revPrintBtn = document.getElementById("revPrintBtn");
   var revDateMode = "today";
   var revTickets = [];
+  var revDues = [];
+  var revBackDate = "";
+
+  var dueModal = document.getElementById("dueModal");
+  var dueModalClose = document.getElementById("dueModalClose");
+  var dueDateModeEl = document.getElementById("dueDateMode");
+  var dueCustomWrap = document.getElementById("dueCustomWrap");
+  var dueCustomDate = document.getElementById("dueCustomDate");
+  var dueDateHint = document.getElementById("dueDateHint");
+  var dueOrderSelect = document.getElementById("dueOrderSelect");
+  var dueAmountInput = document.getElementById("dueAmountInput");
+  var dueModeSelect = document.getElementById("dueModeSelect");
+  var dueNoteInput = document.getElementById("dueNoteInput");
+  var dueAcceptBtn = document.getElementById("dueAcceptBtn");
+  var dueAcceptMsg = document.getElementById("dueAcceptMsg");
+  var failTicketSelect = document.getElementById("failTicketSelect");
+  var failTicketInfo = document.getElementById("failTicketInfo");
+  var failAmountInput = document.getElementById("failAmountInput");
+  var failModeSelect = document.getElementById("failModeSelect");
+  var failNoteInput = document.getElementById("failNoteInput");
+  var failBtn = document.getElementById("failBtn");
+  var failMsg = document.getElementById("failMsg");
+  var failList = document.getElementById("failList");
+
   var REV_MODES = ["Cash", "Scan QR", "PhonePe", "Kausher Pe", "Chacha Pe"];
 
   function amt(v) {
@@ -969,6 +1019,21 @@
 
   function money(n) {
     return "Rs. " + Math.round(n || 0).toLocaleString("en-IN");
+  }
+
+  function num(n) {
+    return Math.round(n || 0).toLocaleString("en-IN");
+  }
+
+  function isoDaysAgo(n) {
+    var d = new Date();
+    d.setDate(d.getDate() - n);
+    return localIso(d);
+  }
+
+  function dmy(iso) {
+    var p = String(iso || "").split("-");
+    return p.length === 3 ? (p[2] + "-" + p[1] + "-" + p[0]) : "-";
   }
 
   function inWords(num) {
@@ -1001,12 +1066,12 @@
     return parts.join(" ");
   }
 
-  function revPass(t) {
-    if (revDateMode === "all") return true;
-    var iso = createdIso(t);
-    if (revDateMode === "today") return iso === localIso(new Date());
-    if (revDateMode === "custom") return revCustomDate && revCustomDate.value ? iso === revCustomDate.value : true;
-    return true;
+  function revMainDate() {
+    if (revDateMode === "all") return null;
+    if (revDateMode === "custom") {
+      return revCustomDate && revCustomDate.value ? revCustomDate.value : localIso(new Date());
+    }
+    return localIso(new Date());
   }
 
   function revRangeLabel() {
@@ -1015,40 +1080,157 @@
     return "All Days";
   }
 
+  function duePaidMap() {
+    var map = {};
+    revDues.forEach(function (d) {
+      var id = String(d.ticket_id || "");
+      map[id] = (map[id] || 0) + amt(d.amount);
+    });
+    return map;
+  }
+
+  function revInfo(t, map) {
+    var total = amt(t.total);
+    var adv = String(t.pay || "") === "Advanced" ? amt(t.adv_amount) : 0;
+    if (adv > total) total = adv;
+    var due = Math.max(total - adv, 0);
+    var rawPaid = map[String(t.id || "")] || 0;
+    var paid = Math.max(0, Math.min(rawPaid, due));
+    var failed = !!t.failed;
+    var refund = 0;
+    if (failed) {
+      refund = (t.refund_amount !== undefined && t.refund_amount !== null && t.refund_amount !== "")
+        ? amt(t.refund_amount) : (adv + paid);
+    }
+    return {
+      total: total,
+      adv: adv,
+      due: due,
+      paid: paid,
+      rawPaid: rawPaid,
+      remaining: failed ? 0 : Math.max(due - paid, 0),
+      failed: failed,
+      refund: refund,
+      mode: String(t.pay_mode || "").trim() || "Not set",
+      refundMode: String(t.refund_mode || "").trim() || "Not set",
+      orderDate: createdIso(t)
+    };
+  }
+
+  function buildLedger(mainDate) {
+    var paidMap = duePaidMap();
+    var main = {}, flow = {}, back = {};
+    var mt = { orders: 0, total: 0, adv: 0, due: 0, paid: 0, remaining: 0, advOrders: 0, dueOrders: 0 };
+    var bt = { orders: 0, total: 0, adv: 0, due: 0, paid: 0, remaining: 0 };
+    var ft = { adv: 0, due_mila: 0, ret: 0, net: 0 };
+    var fails = [], backFails = [];
+    var keys = ["orders", "total", "adv", "due", "paid", "remaining"];
+
+    function bucket(store, mode) {
+      if (!store[mode]) store[mode] = { orders: 0, total: 0, adv: 0, due: 0, paid: 0, remaining: 0 };
+      return store[mode];
+    }
+    function flowBucket(mode) {
+      if (!flow[mode]) flow[mode] = { adv: 0, due_mila: 0, ret: 0 };
+      return flow[mode];
+    }
+
+    revTickets.forEach(function (t) {
+      var info = revInfo(t, paidMap);
+      var inMain = mainDate === null || info.orderDate === mainDate;
+
+      if (inMain && info.adv > 0) flowBucket(info.mode).adv += info.adv;
+
+      if (inMain && !info.failed) {
+        var b = bucket(main, info.mode);
+        keys.forEach(function (k) {
+          var v = k === "orders" ? 1 : info[k];
+          b[k] += v;
+          mt[k] += v;
+        });
+        if (info.adv > 0) mt.advOrders += 1;
+        if (info.remaining > 0) mt.dueOrders += 1;
+      }
+
+      if (revBackDate && info.orderDate === revBackDate && !info.failed) {
+        var bb = bucket(back, info.mode);
+        keys.forEach(function (k) {
+          var v = k === "orders" ? 1 : info[k];
+          bb[k] += v;
+          bt[k] += v;
+        });
+      }
+
+      if (info.failed) {
+        var row = {
+          name: t.t_name || "",
+          orderDate: info.orderDate,
+          failedDate: String(t.failed_date || ""),
+          mode: info.refundMode,
+          adv: info.adv,
+          dueCancelled: Math.max(info.due - info.paid, 0),
+          refund: info.refund
+        };
+        if (inMain || (mainDate !== null && row.failedDate === mainDate)) fails.push(row);
+        if (revBackDate && info.orderDate === revBackDate) backFails.push(row);
+        if ((mainDate === null || row.failedDate === mainDate) && info.refund > 0) {
+          flowBucket(info.refundMode).ret += info.refund;
+        }
+      }
+    });
+
+    revDues.forEach(function (d) {
+      if (mainDate !== null && String(d.accepted_date || "") !== mainDate) return;
+      var mode = String(d.pay_mode || "").trim() || "Not set";
+      flowBucket(mode).due_mila += amt(d.amount);
+    });
+
+    Object.keys(flow).forEach(function (k) {
+      ft.adv += flow[k].adv;
+      ft.due_mila += flow[k].due_mila;
+      ft.ret += flow[k].ret;
+    });
+    ft.net = ft.adv + ft.due_mila - ft.ret;
+
+    function modeKeys(store) {
+      var out = REV_MODES.filter(function (m) { return store[m]; });
+      Object.keys(store).sort().forEach(function (k) {
+        if (out.indexOf(k) === -1) out.push(k);
+      });
+      return out;
+    }
+    function rows(store) {
+      return modeKeys(store).map(function (k) {
+        var r = { mode: k };
+        Object.keys(store[k]).forEach(function (x) { r[x] = store[k][x]; });
+        return r;
+      });
+    }
+
+    return {
+      mainRows: rows(main),
+      mainTot: mt,
+      flowRows: rows(flow),
+      flowTot: ft,
+      backRows: rows(back),
+      backTot: bt,
+      fails: fails,
+      backFails: backFails
+    };
+  }
+
   function renderRevenue() {
     if (!ledgerPaper) return;
+    var mainDate = revMainDate();
+    var led = buildLedger(mainDate);
+    var mt = led.mainTot;
+    var ft = led.flowTot;
+    var bt = led.backTot;
 
-    function box(k, v) {
-      return '<div class="ledger-box"><div class="k">' + esc(k) + '</div><div class="v">' + esc(v) + '</div></div>';
+    function box(k, v, cls) {
+      return '<div class="ledger-box' + (cls ? " " + cls : "") + '"><div class="k">' + esc(k)
+        + '</div><div class="v">' + esc(v) + '</div></div>';
     }
-
-    var items = revTickets.filter(revPass);
-    var modes = {};
-    function bucket(name) {
-      if (!modes[name]) modes[name] = { orders: 0, total: 0, adv: 0, due: 0 };
-      return modes[name];
-    }
-    REV_MODES.forEach(bucket);
-
-    var sum = { orders: 0, total: 0, adv: 0, due: 0, advOrders: 0, dueOrders: 0 };
-    items.forEach(function (t) {
-      var total = amt(t.total);
-      var adv = String(t.pay || "") === "Advanced" ? amt(t.adv_amount) : 0;
-      if (adv > total) total = adv;
-      var due = Math.max(total - adv, 0);
-      var mode = String(t.pay_mode || "").trim() || "Not set";
-      var b = bucket(mode);
-      b.orders += 1; b.total += total; b.adv += adv; b.due += due;
-      sum.orders += 1; sum.total += total; sum.adv += adv; sum.due += due;
-      if (adv > 0) sum.advOrders += 1;
-      if (due > 0) sum.dueOrders += 1;
-    });
-
-    var order = REV_MODES.slice();
-    Object.keys(modes).forEach(function (k) { if (order.indexOf(k) === -1) order.push(k); });
-    order = order.filter(function (k) {
-      return modes[k] && (modes[k].orders > 0 || REV_MODES.indexOf(k) !== -1);
-    });
 
     var now = new Date();
     var dayStamp = now.toLocaleDateString("en-GB");
@@ -1057,93 +1239,498 @@
     var html = '<div class="ledger-head">'
       + '<div><div class="ledger-title">HISAB KITAB</div>'
       + '<div class="ledger-sub">Revenue &middot; ' + esc(revRangeLabel()) + '</div></div>'
-      + '<div class="ledger-meta"><div>' + sum.orders + ' order</div><div>' + esc(dayStamp + ", " + timeStamp) + '</div></div>'
+      + '<div class="ledger-meta"><div>' + mt.orders + ' order</div><div>' + esc(dayStamp + ", " + timeStamp) + '</div></div>'
       + '</div>';
 
     html += '<div class="ledger-summary">'
-      + box("Total Order", String(sum.orders))
-      + box("Total Amount", money(sum.total))
-      + box("Advanced Mila", money(sum.adv))
-      + box("Baki Due", money(sum.due))
+      + box("Total Order", String(mt.orders))
+      + box("Total Amount", money(mt.total))
+      + box("Advanced Mila", money(mt.adv))
+      + box("Baki Due", money(mt.remaining))
       + '</div>';
 
-    html += '<div class="ledger-sec">Kis mode me kitna</div>'
-      + '<table class="ledger-table"><thead><tr>'
+    html += '<div class="ledger-sec">Kis mode me kitna <span class="ledger-sec-note">(rashi Rs. me)</span></div>'
+      + '<div class="ledger-scroll"><table class="ledger-table compact"><thead><tr>'
       + '<th>Payment Mode</th><th class="num">Order</th><th class="num">Advanced</th>'
-      + '<th class="num">Due</th><th class="num">Due + Advanced</th>'
+      + '<th class="num">Due Bana</th><th class="num">Due Mila</th><th class="num">Due Baki</th>'
+      + '<th class="num">Due + Advanced</th>'
       + '</tr></thead><tbody>';
-    if (!items.length) {
-      html += '<tr><td colspan="5" class="ledger-empty">Is date ka koi order nahi hai.</td></tr>';
+    if (!led.mainRows.length) {
+      html += '<tr><td colspan="7" class="ledger-empty">Is date ka koi order nahi hai.</td></tr>';
     } else {
-      order.forEach(function (k) {
-        var b = modes[k];
-        html += '<tr><td>' + esc(k) + '</td><td class="num">' + b.orders + '</td>'
-          + '<td class="num">' + money(b.adv) + '</td><td class="num">' + money(b.due) + '</td>'
-          + '<td class="num">' + money(b.adv + b.due) + '</td></tr>';
+      led.mainRows.forEach(function (r) {
+        html += '<tr><td>' + esc(r.mode) + '</td><td class="num">' + r.orders + '</td>'
+          + '<td class="num">' + num(r.adv) + '</td><td class="num">' + num(r.due) + '</td>'
+          + '<td class="num">' + num(r.paid) + '</td><td class="num">' + num(r.remaining) + '</td>'
+          + '<td class="num">' + num(r.adv + r.due) + '</td></tr>';
       });
     }
-    html += '</tbody><tfoot><tr class="total"><td>Total</td><td class="num">' + sum.orders + '</td>'
-      + '<td class="num">' + money(sum.adv) + '</td><td class="num">' + money(sum.due) + '</td>'
-      + '<td class="num">' + money(sum.adv + sum.due) + '</td></tr></tfoot></table>';
+    html += '</tbody><tfoot><tr class="total"><td>Total</td><td class="num">' + mt.orders + '</td>'
+      + '<td class="num">' + num(mt.adv) + '</td><td class="num">' + num(mt.due) + '</td>'
+      + '<td class="num">' + num(mt.paid) + '</td><td class="num">' + num(mt.remaining) + '</td>'
+      + '<td class="num">' + num(mt.adv + mt.due) + '</td></tr></tfoot></table></div>';
 
-    html += '<div class="ledger-sec">Poora hisab</div>'
-      + '<table class="ledger-table ledger-plain"><tbody>'
-      + '<tr><td>Advanced wale order</td><td class="num">' + sum.advOrders + '</td></tr>'
-      + '<tr><td>Jinka due bacha hai</td><td class="num">' + sum.dueOrders + '</td></tr>'
-      + '<tr><td>Advanced mila</td><td class="num">' + money(sum.adv) + '</td></tr>'
-      + '<tr><td>Due baki</td><td class="num">' + money(sum.due) + '</td></tr>'
-      + '<tr class="total"><td>Due + Advanced (kul)</td><td class="num">' + money(sum.adv + sum.due) + '</td></tr>'
-      + '</tbody></table>';
+    html += '<div class="ledger-sec">Is date par paisa <span class="ledger-sec-note">(advanced + purana due mila - fail return)</span></div>'
+      + '<div class="ledger-summary three">'
+      + box("Purana Due Mila", money(ft.due_mila))
+      + box("Fail Return", money(ft.ret))
+      + box("Net Cash", money(ft.net))
+      + '</div>'
+      + '<div class="ledger-scroll"><table class="ledger-table compact"><thead><tr>'
+      + '<th>Payment Mode</th><th class="num">Naya Advanced</th><th class="num">Purana Due Mila</th>'
+      + '<th class="num">Fail Return</th><th class="num">Net</th>'
+      + '</tr></thead><tbody>';
+    if (!led.flowRows.length) {
+      html += '<tr><td colspan="5" class="ledger-empty">Is date par koi cash movement nahi.</td></tr>';
+    } else {
+      led.flowRows.forEach(function (r) {
+        var net = r.adv + r.due_mila - r.ret;
+        html += '<tr><td>' + esc(r.mode) + '</td><td class="num">' + num(r.adv) + '</td>'
+          + '<td class="num">' + num(r.due_mila) + '</td><td class="num">' + num(r.ret) + '</td>'
+          + '<td class="num">' + num(net) + '</td></tr>';
+      });
+    }
+    html += '</tbody><tfoot><tr class="total"><td>Total</td><td class="num">' + num(ft.adv) + '</td>'
+      + '<td class="num">' + num(ft.due_mila) + '</td><td class="num">' + num(ft.ret) + '</td>'
+      + '<td class="num">' + num(ft.net) + '</td></tr></tfoot></table></div>';
+
+    if (led.fails.length) {
+      html += '<div class="ledger-sec">Fail / Return ticket <span class="ledger-sec-note">(due cancel + paisa wapas)</span></div>'
+        + '<div class="ledger-scroll"><table class="ledger-table compact"><thead><tr>'
+        + '<th>Ticket</th><th>Order</th><th>Fail</th><th>Mode</th>'
+        + '<th class="num">Return</th><th class="num">Due Cancel</th>'
+        + '</tr></thead><tbody>';
+      led.fails.forEach(function (r) {
+        html += '<tr><td>' + esc(r.name || "-") + '</td><td>' + esc(dmy(r.orderDate)) + '</td>'
+          + '<td>' + esc(dmy(r.failedDate)) + '</td><td>' + esc(r.mode) + '</td>'
+          + '<td class="num">' + num(r.refund) + '</td><td class="num">' + num(r.dueCancelled) + '</td></tr>';
+      });
+      html += '</tbody></table></div>';
+    }
+
+    html += '<div class="ledger-sec ledger-back-head">Pichhle date ka hisab <span class="ledger-sec-note">(back date ' + esc(dmy(revBackDate)) + ')</span></div>';
+    if (mainDate && revBackDate === mainDate) {
+      html += '<div class="ledger-empty">Back date selected date ke barabar hai. Accept Due me doosri date chunein.</div>';
+    } else {
+      html += '<div class="ledger-scroll"><table class="ledger-table compact"><thead><tr>'
+        + '<th>Payment Mode</th><th class="num">Order</th><th class="num">Advanced</th>'
+        + '<th class="num">Due Bana</th><th class="num">Due Mila</th><th class="num">Due Baki</th>'
+        + '</tr></thead><tbody>';
+      if (!led.backRows.length) {
+        html += '<tr><td colspan="6" class="ledger-empty">Us date ka koi order nahi hai.</td></tr>';
+      } else {
+        led.backRows.forEach(function (r) {
+          html += '<tr><td>' + esc(r.mode) + '</td><td class="num">' + r.orders + '</td>'
+            + '<td class="num">' + num(r.adv) + '</td><td class="num">' + num(r.due) + '</td>'
+            + '<td class="num">' + num(r.paid) + '</td><td class="num">' + num(r.remaining) + '</td></tr>';
+        });
+      }
+      html += '</tbody><tfoot><tr class="total"><td>Total</td><td class="num">' + bt.orders + '</td>'
+        + '<td class="num">' + num(bt.adv) + '</td><td class="num">' + num(bt.due) + '</td>'
+        + '<td class="num">' + num(bt.paid) + '</td><td class="num">' + num(bt.remaining) + '</td>'
+        + '</tr></tfoot></table></div>';
+      led.backFails.forEach(function (r) {
+        html += '<div class="ledger-fail-line">Fail: ' + esc(r.name || "-") + ' &middot; return '
+          + money(r.refund) + ' &middot; due cancel ' + money(r.dueCancelled) + '</div>';
+      });
+    }
 
     html += '<div class="ledger-words">'
-      + '<div>Advanced mila: <b>' + money(sum.adv) + '</b></div>'
-      + '<div>Due baki: <b>' + money(sum.due) + '</b></div>'
-      + '<div>Due + Advanced: <b>' + money(sum.adv + sum.due) + '</b></div>'
-      + '<div class="ledger-inwords">Shabd me: <i>Rupees ' + esc(inWords(sum.adv + sum.due)) + ' only</i></div>'
+      + '<div>Order ka kul (Due + Advanced): <b>' + money(mt.adv + mt.due) + '</b></div>'
+      + '<div>Advanced mila: <b>' + money(mt.adv) + '</b></div>'
+      + '<div>Purana due mila: <b>' + money(ft.due_mila) + '</b></div>'
+      + '<div>Fail return: <b>' + money(ft.ret) + '</b></div>'
+      + '<div>Net cash (advanced + due mila - return): <b>' + money(ft.net) + '</b></div>'
+      + '<div class="ledger-inwords">Shabd me: <i>Rupees ' + esc(inWords(ft.net)) + ' only</i></div>'
       + '</div>';
 
     html += '<div class="ledger-sign"><span>Signature</span><span>Date: ' + esc(dayStamp) + '</span></div>';
 
     ledgerPaper.innerHTML = html;
-    if (revNote) revNote.textContent = sum.orders + " order \u2022 " + revRangeLabel();
+    if (revNote) {
+      revNote.textContent = mt.orders + " order \u2022 " + revRangeLabel()
+        + " \u2022 net cash " + money(ft.net);
+    }
   }
 
   function loadRevenue() {
-    if (!ledgerPaper) return;
+    if (!ledgerPaper) return Promise.resolve();
     ledgerPaper.innerHTML = '<div class="empty">Hisab loading...</div>';
-    fetch("/api/tickets", { headers: { "X-CSRF-Token": csrf } })
-      .then(function (r) { return r.json(); })
-      .then(function (data) {
-        if (data.success) {
-          revTickets = data.tickets || [];
-          renderRevenue();
-        } else {
-          ledgerPaper.innerHTML = '<div class="empty">Hisab load nahi hua.</div>';
-        }
+    return Promise.all([
+      fetch("/api/tickets", { headers: { "X-CSRF-Token": csrf } }).then(function (r) { return r.json(); }),
+      fetch("/api/dues", { headers: { "X-CSRF-Token": csrf } }).then(function (r) {
+        return r.ok ? r.json() : { success: false, dues: [] };
+      }).catch(function () { return { success: false, dues: [] }; })
+    ])
+      .then(function (res) {
+        var data = res[0] || {};
+        if (!data.success) throw new Error(data.error || "Hisab load nahi hua.");
+        revTickets = data.tickets || [];
+        revDues = (res[1] && res[1].success) ? (res[1].dues || []) : [];
+        if (!revBackDate) revBackDate = isoDaysAgo(1);
+        renderRevenue();
+        if (dueModal && !dueModal.classList.contains("hidden")) renderDuePanel();
       })
-      .catch(function () { ledgerPaper.innerHTML = '<div class="empty">Network error.</div>'; });
+      .catch(function (err) {
+        ledgerPaper.innerHTML = '<div class="empty">' + esc((err && err.message) || "Network error.") + '</div>';
+      });
+  }
+
+  // ---------------- Accept Due / Fail modal ----------------
+  function dueSelectedDate() {
+    if (dueDateModeEl && dueDateModeEl.value === "custom" && dueCustomDate && dueCustomDate.value) {
+      return dueCustomDate.value;
+    }
+    return isoDaysAgo(1);
+  }
+
+  function ticketBySelect(sel) {
+    if (!sel || !sel.value) return null;
+    var id = sel.value;
+    for (var i = 0; i < revTickets.length; i++) {
+      if (String(revTickets[i].id) === id) return revTickets[i];
+    }
+    return null;
+  }
+
+  function fillModeSelect(sel) {
+    if (!sel) return;
+    var current = sel.value;
+    sel.innerHTML = "";
+    REV_MODES.forEach(function (m) {
+      var o = document.createElement("option");
+      o.value = m;
+      o.textContent = m;
+      sel.appendChild(o);
+    });
+    if (current && REV_MODES.indexOf(current) !== -1) sel.value = current;
+  }
+
+  function setMsg(el, txt) {
+    if (el) el.textContent = txt || "";
+  }
+
+  function renderDuePanel() {
+    if (!dueOrderSelect) return;
+    var date = dueSelectedDate();
+    revBackDate = date;
+    if (dueCustomWrap) dueCustomWrap.classList.toggle("hidden", !dueDateModeEl || dueDateModeEl.value !== "custom");
+    if (dueCustomDate && !dueCustomDate.value) dueCustomDate.value = date;
+
+    var paidMap = duePaidMap();
+    var items = revTickets.filter(function (t) { return createdIso(t) === date; })
+      .sort(function (a, b) { return String(a.t_name || "").localeCompare(String(b.t_name || "")); });
+    var dueItems = items.filter(function (t) { return !t.failed && revInfo(t, paidMap).remaining > 0; });
+    var openItems = items.filter(function (t) { return !t.failed; });
+
+    var totalDue = 0, totalPaid = 0;
+    items.filter(function (t) { return !t.failed; }).forEach(function (t) {
+      var info = revInfo(t, paidMap);
+      totalDue += info.due;
+      totalPaid += info.paid;
+    });
+    var dueLeft = 0;
+    dueItems.forEach(function (t) { dueLeft += revInfo(t, paidMap).remaining; });
+    if (dueDateHint) {
+      dueDateHint.textContent = "Order date " + dmy(date) + " \u2022 " + items.length + " order"
+        + " \u2022 due bana " + money(totalDue) + " \u2022 due mila " + money(totalPaid)
+        + " \u2022 baki " + money(dueLeft);
+    }
+
+    dueOrderSelect.innerHTML = "";
+    if (!dueItems.length) {
+      var oe = document.createElement("option");
+      oe.value = "";
+      oe.textContent = "Is date par koi due baki nahi";
+      dueOrderSelect.appendChild(oe);
+      dueOrderSelect.disabled = true;
+      dueAmountInput.value = "";
+      dueAmountInput.max = "";
+      dueAcceptBtn.disabled = true;
+      setMsg(dueAcceptMsg, "");
+    } else {
+      dueOrderSelect.disabled = false;
+      dueItems.forEach(function (t, i) {
+        var info = revInfo(t, paidMap);
+        var o = document.createElement("option");
+        o.value = t.id;
+        o.textContent = (i + 1) + ". " + (t.t_name || "TICKET")
+          + " \u2014 " + (t.src || "-") + "\u2192" + (t.dst || "-")
+          + " \u2014 Due Rs " + num(info.remaining);
+        dueOrderSelect.appendChild(o);
+      });
+      dueAcceptBtn.disabled = false;
+    }
+    syncDueAmount();
+
+    fillModeSelect(dueModeSelect);
+    fillModeSelect(failModeSelect);
+
+    failTicketSelect.innerHTML = "";
+    if (!openItems.length) {
+      var fe = document.createElement("option");
+      fe.value = "";
+      fe.textContent = "Is date par koi ticket nahi";
+      failTicketSelect.appendChild(fe);
+      failTicketSelect.disabled = true;
+      failBtn.disabled = true;
+      if (failTicketInfo) failTicketInfo.textContent = "";
+      failAmountInput.value = "";
+      failAmountInput.max = "";
+    } else {
+      failTicketSelect.disabled = false;
+      failBtn.disabled = false;
+      openItems.forEach(function (t, i) {
+        var info = revInfo(t, paidMap);
+        var o = document.createElement("option");
+        o.value = t.id;
+        o.textContent = (i + 1) + ". " + (t.t_name || "TICKET")
+          + " \u2014 Adv Rs " + num(info.adv) + " \u2022 Due Rs " + num(info.remaining);
+        failTicketSelect.appendChild(o);
+      });
+    }
+    syncFailTicket();
+
+    // Failed list for this date
+    if (failList) {
+      failList.innerHTML = "";
+      var used = items.filter(function (t) { return !!t.failed; });
+      if (!used.length) {
+        var none = document.createElement("div");
+        none.className = "due-hint";
+        none.textContent = "Is date ka koi ticket fail nahi hai.";
+        failList.appendChild(none);
+      } else {
+        used.forEach(function (t) {
+          var info = revInfo(t, paidMap);
+          var row = document.createElement("div");
+          row.className = "fail-row";
+          var txt = document.createElement("span");
+          txt.textContent = (t.t_name || "TICKET") + " \u2014 Return " + money(info.refund)
+            + " \u2022 Due cancel " + money(Math.max(info.due - info.paid, 0));
+          var undo = document.createElement("button");
+          undo.type = "button";
+          undo.className = "btn btn-ghost btn-sm";
+          undo.textContent = "Undo Fail";
+          undo.addEventListener("click", function () {
+            undo.disabled = true;
+            fetch("/api/tickets/" + t.id + "/unfail", {
+              method: "POST",
+              headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf },
+              body: "{}"
+            })
+              .then(function (r) { return r.json(); })
+              .then(function (d) {
+                if (!d.success) throw new Error(d.error || "Undo nahi hua.");
+                toast("Fail undo ho gaya.", "ok");
+                return loadRevenue();
+              })
+              .catch(function (err) { toast(err.message || "Undo nahi hua.", "err"); undo.disabled = false; });
+          });
+          row.appendChild(txt);
+          row.appendChild(undo);
+          failList.appendChild(row);
+        });
+      }
+    }
+  }
+
+  function syncDueAmount() {
+    var t = ticketBySelect(dueOrderSelect);
+    if (!t) {
+      dueAmountInput.value = "";
+      dueAmountInput.max = "";
+      dueAcceptBtn.disabled = true;
+      return;
+    }
+    var info = revInfo(t, duePaidMap());
+    dueAmountInput.value = info.remaining;
+    dueAmountInput.max = info.remaining;
+    dueAcceptBtn.disabled = false;
+    setMsg(dueAcceptMsg, "Baki due " + money(info.remaining) + " \u2022 Advanced " + money(info.adv)
+      + " \u2022 Total " + money(info.total));
+  }
+
+  function syncFailTicket() {
+    var t = ticketBySelect(failTicketSelect);
+    if (!t) {
+      failAmountInput.value = "";
+      failAmountInput.max = "";
+      failBtn.disabled = true;
+      if (failTicketInfo) failTicketInfo.textContent = "";
+      return;
+    }
+    var info = revInfo(t, duePaidMap());
+    var maxRefund = info.adv + info.rawPaid;
+    failAmountInput.value = maxRefund;
+    failAmountInput.max = maxRefund;
+    failBtn.disabled = false;
+    if (failTicketInfo) {
+      failTicketInfo.textContent = "Advanced " + money(info.adv)
+        + " \u2022 Due " + money(info.remaining)
+        + " \u2022 Accepted due " + money(info.rawPaid)
+        + " \u2022 Return " + money(maxRefund) + " tak";
+    }
+    if (failModeSelect) {
+      var m = String(t.pay_mode || "").trim();
+      if (REV_MODES.indexOf(m) !== -1) failModeSelect.value = m;
+    }
+  }
+
+  function openDueModal() {
+    if (!dueModal) return;
+    if (dueDateModeEl && dueDateModeEl.value === "custom" && dueCustomDate && !dueCustomDate.value) {
+      dueCustomDate.value = isoDaysAgo(1);
+    }
+    revBackDate = dueSelectedDate();
+    dueModal.classList.remove("hidden");
+    setMsg(dueAcceptMsg, "");
+    setMsg(failMsg, "");
+    renderDuePanel();
+    renderRevenue();
+    loadRevenue();
+  }
+
+  function closeDueModal() {
+    if (dueModal) dueModal.classList.add("hidden");
   }
 
   if (revDateFilter) {
     revDateFilter.addEventListener("change", function () {
       revDateMode = revDateFilter.value;
       if (revCustomWrap) revCustomWrap.classList.toggle("hidden", revDateMode !== "custom");
+      if (revDateMode === "custom" && revCustomDate && !revCustomDate.value) {
+        revCustomDate.value = localIso(new Date());
+      }
       renderRevenue();
     });
   }
-  if (revCustomDate) revCustomDate.addEventListener("change", renderRevenue);
-  if (revRefreshBtn) revRefreshBtn.addEventListener("click", loadRevenue);
+  if (revCustomDate) {
+    revCustomDate.addEventListener("change", function () {
+      if (revCustomDate.value) revDateMode = "custom";
+      renderRevenue();
+    });
+  }
+  if (revRefreshBtn) revRefreshBtn.addEventListener("click", function () { loadRevenue(); });
+  if (revDueBtn) revDueBtn.addEventListener("click", openDueModal);
+  if (dueModalClose) dueModalClose.addEventListener("click", closeDueModal);
+  if (dueModal) {
+    dueModal.addEventListener("click", function (e) {
+      if (e.target === dueModal) closeDueModal();
+    });
+  }
+
+  if (dueDateModeEl) {
+    dueDateModeEl.addEventListener("change", function () {
+      if (dueDateModeEl.value === "custom" && dueCustomDate && !dueCustomDate.value) {
+        dueCustomDate.value = isoDaysAgo(1);
+      }
+      revBackDate = dueSelectedDate();
+      renderRevenue();
+      renderDuePanel();
+    });
+  }
+  if (dueCustomDate) {
+    dueCustomDate.addEventListener("change", function () {
+      revBackDate = dueSelectedDate();
+      renderRevenue();
+      renderDuePanel();
+    });
+  }
+  if (dueOrderSelect) dueOrderSelect.addEventListener("change", syncDueAmount);
+  if (failTicketSelect) failTicketSelect.addEventListener("change", syncFailTicket);
+
+  if (dueAcceptBtn) {
+    dueAcceptBtn.addEventListener("click", function () {
+      var t = ticketBySelect(dueOrderSelect);
+      if (!t) return;
+      var amount = amt(dueAmountInput.value);
+      var mode = dueModeSelect ? dueModeSelect.value : "";
+      if (amount <= 0) { setMsg(dueAcceptMsg, "Amount 0 se zyada daalein."); return; }
+      dueAcceptBtn.disabled = true;
+      setMsg(dueAcceptMsg, "Accept ho raha hai...");
+      fetch("/api/dues", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf },
+        body: JSON.stringify({
+          ticket_id: t.id,
+          amount: amount,
+          pay_mode: mode,
+          note: dueNoteInput ? dueNoteInput.value : ""
+        })
+      })
+        .then(function (r) {
+          return r.json().then(function (d) {
+            if (!r.ok || !d.success) throw new Error(d.error || "Due accept nahi hua.");
+            return d;
+          });
+        })
+        .then(function (d) {
+          toast(d.message || "Due accept ho gaya.", "ok");
+          if (dueNoteInput) dueNoteInput.value = "";
+          return loadRevenue();
+        })
+        .catch(function (err) {
+          setMsg(dueAcceptMsg, err.message || "Due accept nahi hua.");
+          toast(err.message || "Due accept nahi hua.", "err");
+        })
+        .finally(function () { dueAcceptBtn.disabled = false; });
+    });
+  }
+
+  if (failBtn) {
+    failBtn.addEventListener("click", function () {
+      var t = ticketBySelect(failTicketSelect);
+      if (!t) return;
+      if (!confirm("Ticket '" + (t.t_name || "") + "' fail mark karein? Advanced/paid return + baki due cancel ho jayega.")) return;
+      var amount = amt(failAmountInput.value);
+      var mode = failModeSelect ? failModeSelect.value : "";
+      failBtn.disabled = true;
+      setMsg(failMsg, "Fail mark ho raha hai...");
+      fetch("/api/tickets/" + t.id + "/fail", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf },
+        body: JSON.stringify({
+          refund_amount: amount,
+          pay_mode: mode,
+          note: failNoteInput ? failNoteInput.value : ""
+        })
+      })
+        .then(function (r) {
+          return r.json().then(function (d) {
+            if (!r.ok || !d.success) throw new Error(d.error || "Ticket fail nahi hua.");
+            return d;
+          });
+        })
+        .then(function (d) {
+          toast(d.message || "Ticket fail mark hua.", "ok");
+          if (failNoteInput) failNoteInput.value = "";
+          return loadRevenue();
+        })
+        .catch(function (err) {
+          setMsg(failMsg, err.message || "Ticket fail nahi hua.");
+          toast(err.message || "Ticket fail nahi hua.", "err");
+        })
+        .finally(function () { failBtn.disabled = false; });
+    });
+  }
+
   if (revPdfBtn) {
     revPdfBtn.addEventListener("click", function () {
-      var items = revTickets.filter(revPass);
-      if (!items.length) { toast("Is filter me koi order nahi mila.", "err"); return; }
+      var led = buildLedger(revMainDate());
+      var hasAny = led.mainTot.orders > 0 || led.mainRows.length > 0
+        || led.flowTot.due_mila > 0 || led.flowTot.ret > 0
+        || led.backRows.length > 0 || led.fails.length > 0;
+      if (!hasAny) { toast("Is filter me koi hisab nahi mila.", "err"); return; }
       revPdfBtn.disabled = true;
       revPdfBtn.textContent = "PDF ban raha hai...";
       fetch("/api/revenue/export", {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf },
         body: JSON.stringify({
-          ids: items.map(function (t) { return t.id; }),
+          mode: revDateMode,
+          date: revMainDate() || "",
+          back_date: revBackDate || isoDaysAgo(1),
           label: revRangeLabel()
         })
       })
@@ -1170,6 +1757,7 @@
   }
   if (revPrintBtn) revPrintBtn.addEventListener("click", function () { window.print(); });
 
+  revBackDate = isoDaysAgo(1);
   if (initialTab === "revenue") loadRevenue();
   if (pdfList) loadPdfs();
 })();

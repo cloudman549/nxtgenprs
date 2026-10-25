@@ -129,12 +129,18 @@ users_col = db["users"]
 pdfs_col = db["pdfs"]
 tickets_col = db["tickets"]
 
+# Back-date due accept / fail-return entries (hisab kitab ke adjustments).
+due_payments_col = db["due_payments"]
+
 fresh_ids_col = db["fresh_ids"]
 
 notepad_col = db["notepad"]
 
 # Shared team notes board (sabki dikhti hain, author tag ke saath).
 notes_col = db["notepad_notes"]
+
+# Notepad board ka shared state (abhi kaun sa note red selected hai).
+notepad_state_col = db["notepad_state"]
 
 chat_col = db["chat_messages"]
 try:
@@ -195,6 +201,8 @@ def _init_db_more():
         (pdfs_col, [("share_token", ASCENDING)], {"sparse": True}),
         (fresh_ids_col, [("created_at", ASCENDING)], {}),
         (tickets_col, [("user_id", ASCENDING), ("created_at", ASCENDING)], {}),
+        (due_payments_col, [("user_id", ASCENDING), ("accepted_date", ASCENDING)], {}),
+        (due_payments_col, [("ticket_id", ASCENDING)], {}),
     ):
         try:
             coll.create_index(keys, **kw)
@@ -1903,6 +1911,11 @@ def _serialize_ticket(doc):
         "confirm_only": doc.get("confirm_only", True),
         "skip_food": doc.get("skip_food", False),
         "starred": bool(doc.get("starred", False)),
+        "failed": bool(doc.get("failed", False)),
+        "failed_date": doc.get("failed_date", ""),
+        "refund_amount": doc.get("refund_amount", ""),
+        "refund_mode": doc.get("refund_mode", ""),
+        "refund_note": doc.get("refund_note", ""),
         "pt_limit": doc.get("pt_limit", "0"),
         "avail_info": doc.get("avail_info"),
         "username": doc.get("username", ""),
@@ -2820,6 +2833,7 @@ def api_delete_ticket(user, ticket_id):
         return jsonify({"success": False, "error": "Is ticket ko delete karne ki permission nahi hai."}), 403
     try:
         tickets_col.delete_one({"_id": oid})
+        due_payments_col.delete_many({"ticket_id": str(oid)})
     except PyMongoError:
         logger.exception("Could not delete ticket")
         return jsonify({"success": False, "error": "Ticket delete nahi ho saki."}), 500
@@ -3408,34 +3422,199 @@ def _rev_amt(v):
     return int(s) if s else 0
 
 
-def _revenue_rows(docs):
-    """Same hisab as the dashboard: mode-wise advanced / due / due+advanced."""
-    modes = {m: {"orders": 0, "total": 0, "adv": 0, "due": 0} for m in _REV_MODES}
-    tot = {"orders": 0, "total": 0, "adv": 0, "due": 0, "adv_orders": 0, "due_orders": 0}
+def _local_iso(dt):
+    """UTC (naive ya aware) datetime -> user ke local timezone ki YYYY-MM-DD."""
+    if not isinstance(dt, datetime):
+        return ""
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone().strftime("%Y-%m-%d")
+
+
+def _valid_iso(s):
+    s = str(s or "").strip()
+    try:
+        datetime.strptime(s, "%Y-%m-%d")
+    except (TypeError, ValueError):
+        return ""
+    return s
+
+
+def _today_iso():
+    return datetime.now().astimezone().strftime("%Y-%m-%d")
+
+
+def _yesterday_iso():
+    return (datetime.now().astimezone() - timedelta(days=1)).strftime("%Y-%m-%d")
+
+
+def _ticket_paid(ticket_id):
+    """Is ticket ke against ab tak accept hua total due."""
+    try:
+        rows = due_payments_col.find({"ticket_id": str(ticket_id)})
+    except PyMongoError:
+        return 0
+    return sum(_rev_amt(r.get("amount")) for r in rows)
+
+
+def _ticket_money(doc, paid=0):
+    """Order + due + accepted due ka hisab (JS ke revInfo ka mirror)."""
+    total = _rev_amt(doc.get("total"))
+    adv = _rev_amt(doc.get("adv_amount")) if str(doc.get("pay") or "") == "Advanced" else 0
+    if adv > total:
+        total = adv
+    due = max(total - adv, 0)
+    paid = max(0, min(int(paid or 0), due))
+    failed = bool(doc.get("failed"))
+    refund = _rev_amt(doc.get("refund_amount")) if "refund_amount" in doc else adv + paid
+    return {
+        "total": total,
+        "adv": adv,
+        "due": due,
+        "paid": paid,
+        "remaining": 0 if failed else max(due - paid, 0),
+        "failed": failed,
+        "refund": refund,
+        "mode": str(doc.get("pay_mode") or "").strip() or "Not set",
+        "refund_mode": str(doc.get("refund_mode") or "").strip() or "Not set",
+        "order_date": _local_iso(doc.get("created_at")),
+    }
+
+
+def _modes_order(store):
+    keys = [m for m in _REV_MODES if m in store]
+    keys += sorted(k for k in store if k not in _REV_MODES)
+    return keys
+
+
+def _revenue_ledger(docs, dues, main_date=None, back_date=None):
+    """Poora hisab: main date ke order + us date par due recovery/return + back date.
+
+    main_date=None -> sab din. Har amount int rupees me.
+    """
+    paid_by = {}
+    for r in dues:
+        tid = str(r.get("ticket_id") or "")
+        paid_by[tid] = paid_by.get(tid, 0) + _rev_amt(r.get("amount"))
+
+    def empty_bucket():
+        return {"orders": 0, "total": 0, "adv": 0, "due": 0, "paid": 0, "remaining": 0}
+
+    main_modes, back_modes, flow = {}, {}, {}
+
+    def bucket(store, mode):
+        if mode not in store:
+            store[mode] = empty_bucket()
+        return store[mode]
+
+    main_tot = empty_bucket()
+    main_tot.update({"adv_orders": 0, "due_orders": 0})
+    back_tot = empty_bucket()
+    flow_tot = {"adv": 0, "due_mila": 0, "ret": 0, "net": 0}
+    fails, back_fails, receipts = [], [], []
+
     for d in docs:
-        total = _rev_amt(d.get("total"))
-        adv = _rev_amt(d.get("adv_amount")) if str(d.get("pay") or "") == "Advanced" else 0
-        if adv > total:
-            total = adv
-        due = max(total - adv, 0)
-        mode = str(d.get("pay_mode") or "").strip() or "Not set"
-        b = modes.setdefault(mode, {"orders": 0, "total": 0, "adv": 0, "due": 0})
-        for k, v in (("orders", 1), ("total", total), ("adv", adv), ("due", due)):
-            b[k] += v
-            tot[k] += v
-        if adv > 0:
-            tot["adv_orders"] += 1
-        if due > 0:
-            tot["due_orders"] += 1
-    order = list(_REV_MODES)
-    for k in modes:
-        if k not in order:
-            order.append(k)
-    order = [k for k in order if modes[k]["orders"] > 0 or k in _REV_MODES]
-    return order, modes, tot
+        info = _ticket_money(d, paid_by.get(str(d["_id"]), 0))
+        od = info["order_date"]
+        in_main = main_date is None or od == main_date
+
+        if in_main and info["adv"] > 0:
+            # Advanced cash to us date hi aaya tha (fail hone par bhi — return alag row me).
+            f = flow.setdefault(info["mode"], {"adv": 0, "due_mila": 0, "ret": 0})
+            f["adv"] += info["adv"]
+
+        if in_main and not info["failed"]:
+            b = bucket(main_modes, info["mode"])
+            for k in ("orders", "total", "adv", "due", "paid", "remaining"):
+                v = 1 if k == "orders" else info[k]
+                b[k] += v
+                main_tot[k] += v
+            if info["adv"] > 0:
+                main_tot["adv_orders"] += 1
+            if info["remaining"] > 0:
+                main_tot["due_orders"] += 1
+
+        if back_date and od == back_date and not info["failed"]:
+            b = bucket(back_modes, info["mode"])
+            for k in ("orders", "total", "adv", "due", "paid", "remaining"):
+                v = 1 if k == "orders" else info[k]
+                b[k] += v
+                back_tot[k] += v
+
+        if info["failed"]:
+            fd = str(d.get("failed_date") or "")
+            row = {
+                "name": d.get("t_name", ""),
+                "order_date": od,
+                "failed_date": fd,
+                "mode": info["refund_mode"],
+                "adv": info["adv"],
+                "due_cancelled": max(info["due"] - info["paid"], 0),
+                "refund": info["refund"],
+            }
+            if in_main or (main_date is not None and fd == main_date):
+                fails.append(row)
+            if back_date and od == back_date:
+                back_fails.append(row)
+            if main_date is None or fd == main_date:
+                if info["refund"] > 0:
+                    f = flow.setdefault(info["refund_mode"], {"adv": 0, "due_mila": 0, "ret": 0})
+                    f["ret"] += info["refund"]
+
+    for r in dues:
+        ad = str(r.get("accepted_date") or "")
+        if main_date is not None and ad != main_date:
+            continue
+        mode = str(r.get("pay_mode") or "").strip() or "Not set"
+        amount = _rev_amt(r.get("amount"))
+        f = flow.setdefault(mode, {"adv": 0, "due_mila": 0, "ret": 0})
+        f["due_mila"] += amount
+        receipts.append({
+            "order_date": r.get("order_date", ""),
+            "mode": mode,
+            "amount": amount,
+            "note": r.get("note", ""),
+        })
+
+    for f in flow.values():
+        for k in ("adv", "due_mila", "ret"):
+            flow_tot[k] += f[k]
+    flow_tot["net"] = flow_tot["adv"] + flow_tot["due_mila"] - flow_tot["ret"]
+
+    def rows(store):
+        return [dict(mode=m, **store[m]) for m in _modes_order(store)]
+
+    flow_rows = [dict(mode=m, **flow[m]) for m in _modes_order(flow)]
+    return {
+        "main_rows": rows(main_modes),
+        "main_tot": main_tot,
+        "back_rows": rows(back_modes),
+        "back_tot": back_tot,
+        "flow_rows": flow_rows,
+        "flow_tot": flow_tot,
+        "fails": fails,
+        "back_fails": back_fails,
+        "receipts": receipts,
+        "main_date": main_date or "",
+        "back_date": back_date or "",
+    }
 
 
-def _build_revenue_pdf(docs, label=""):
+def _serialize_due(doc):
+    return {
+        "id": str(doc["_id"]),
+        "ticket_id": str(doc.get("ticket_id") or ""),
+        "order_date": doc.get("order_date", ""),
+        "amount": doc.get("amount", 0),
+        "pay_mode": doc.get("pay_mode", ""),
+        "accepted_date": doc.get("accepted_date", ""),
+        "accepted_at": doc.get("accepted_at"),
+        "note": doc.get("note", ""),
+    }
+
+
+
+def _build_revenue_pdf(docs, dues, main_date=None, back_date=None, label=""):
     """A4 hisab-kitab sheet (same numbers as the dashboard Revenue tab)."""
     page_w, page_h = A4
     left = 16 * mm
@@ -3444,7 +3623,8 @@ def _build_revenue_pdf(docs, label=""):
     bottom = 16 * mm
     inner_w = page_w - left - right
 
-    order, modes, tot = _revenue_rows(docs)
+    led = _revenue_ledger(docs, dues, main_date, back_date)
+    mt, bt, ft = led["main_tot"], led["back_tot"], led["flow_tot"]
     now = datetime.now()
     stamp = now.strftime("%d/%m/%Y, %I:%M %p")
 
@@ -3488,7 +3668,7 @@ def _build_revenue_pdf(docs, label=""):
     c.setFillColor(colors.HexColor("#57657a"))
     c.setFont(_FONT_NORMAL, 9)
     c.drawString(left, y - 29, "Revenue  |  " + (label or "All Days"))
-    c.drawRightString(page_w - right, y - 13, "%d order" % tot["orders"])
+    c.drawRightString(page_w - right, y - 13, "%d order" % mt["orders"])
     c.drawRightString(page_w - right, y - 26, stamp)
     y -= 38
     c.setStrokeColor(colors.HexColor("#334155"))
@@ -3496,48 +3676,69 @@ def _build_revenue_pdf(docs, label=""):
     c.line(left, y, page_w - right, y)
     y -= 16
 
-    # ---- summary boxes ----
-    boxes = (("TOTAL ORDER", str(tot["orders"])),
-             ("TOTAL AMOUNT", "Rs. " + _inr(tot["total"])),
-             ("ADVANCED MILA", "Rs. " + _inr(tot["adv"])),
-             ("BAKI DUE", "Rs. " + _inr(tot["due"])))
-    box_gap = 6
-    bw = (inner_w - box_gap * 3) / 4.0
-    bh = 38
-    for i, (k, v) in enumerate(boxes):
-        x = left + i * (bw + box_gap)
-        c.saveState()
-        c.setDash(2, 2)
-        c.setStrokeColor(colors.HexColor("#93a2b8"))
-        c.setLineWidth(0.6)
-        c.rect(x, y - bh, bw, bh, stroke=1, fill=0)
-        c.restoreState()
-        c.setFillColor(colors.HexColor("#64748b"))
-        c.setFont(_FONT_BOLD, 6.2)
-        c.drawString(x + 6, y - 12, k)
-        c.setFillColor(colors.HexColor("#1f2937"))
-        c.setFont(_FONT_BOLD, 11)
-        c.drawString(x + 6, y - 27, _fit(v, _FONT_BOLD, 11, bw - 12))
-    y -= bh + 22
-
-    def _table(title, header, rows, widths, right_cols, total_row=None):
+    def _boxes(items, per_row=4, bh=38):
         nonlocal y
-        _break_if(30 + 14 * (len(rows) + 1))
+        gap = 6
+        bw = (inner_w - gap * (per_row - 1)) / float(per_row)
+        for start in range(0, len(items), per_row):
+            row = items[start:start + per_row]
+            for i, (k, v) in enumerate(row):
+                x = left + i * (bw + gap)
+                c.saveState()
+                c.setDash(2, 2)
+                c.setStrokeColor(colors.HexColor("#93a2b8"))
+                c.setLineWidth(0.6)
+                c.rect(x, y - bh, bw, bh, stroke=1, fill=0)
+                c.restoreState()
+                c.setFillColor(colors.HexColor("#64748b"))
+                c.setFont(_FONT_BOLD, 6.2)
+                c.drawString(x + 6, y - 12, k)
+                c.setFillColor(colors.HexColor("#1f2937"))
+                c.setFont(_FONT_BOLD, 11)
+                c.drawString(x + 6, y - 27, _fit(v, _FONT_BOLD, 11, bw - 12))
+            y -= bh + 6
+        y -= 8
+
+    # ---- main summary ----
+    _boxes((("TOTAL ORDER", str(mt["orders"])),
+            ("TOTAL AMOUNT", "Rs. " + _inr(mt["total"])),
+            ("ADVANCED MILA", "Rs. " + _inr(mt["adv"])),
+            ("BAKI DUE", "Rs. " + _inr(mt["remaining"]))))
+
+    def _section(title, note=""):
+        nonlocal y
+        _break_if(40)
         c.setFillColor(colors.HexColor("#334155"))
-        c.setFont(_FONT_BOLD, 8.4)
+        c.setFont(_FONT_BOLD, 10.5)
         c.drawString(left, y, title)
-        y -= 13
+        if note:
+            c.setFillColor(colors.HexColor("#57657a"))
+            c.setFont(_FONT_ITALIC, 7.4)
+            c.drawString(left + _pdfmetrics.stringWidth(title, _FONT_BOLD, 10.5) + 8, y, note)
+        y -= 5
+        c.setStrokeColor(colors.HexColor("#334155"))
+        c.setLineWidth(0.7)
+        c.line(left, y, page_w - right, y)
+        y -= 11
+
+    def _table(title, header, rows, widths, right_cols, total_row=None, size=7.8):
+        nonlocal y
+        _break_if(30 + 13 * (len(rows) + 1))
+        c.setFillColor(colors.HexColor("#334155"))
+        c.setFont(_FONT_BOLD, 8.2)
+        c.drawString(left, y, title)
+        y -= 12
         data = [list(header)] + rows + ([total_row] if total_row else [])
         t = Table(data, colWidths=widths, hAlign="LEFT")
         cmds = [
             ("FONTNAME", (0, 0), (-1, -1), _FONT_NORMAL),
             ("FONTNAME", (0, 0), (-1, 0), _FONT_BOLD),
-            ("FONTSIZE", (0, 0), (-1, -1), 8.4),
+            ("FONTSIZE", (0, 0), (-1, -1), size),
             ("TEXTCOLOR", (0, 0), (-1, 0), colors.HexColor("#334155")),
             ("TEXTCOLOR", (0, 1), (-1, -1), colors.HexColor("#1f2937")),
             ("LINEBELOW", (0, 0), (-1, 0), 1.0, colors.HexColor("#334155")),
-            ("TOPPADDING", (0, 0), (-1, -1), 4.5),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 4.5),
+            ("TOPPADDING", (0, 0), (-1, -1), 4.0),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 4.0),
             ("LEFTPADDING", (0, 0), (-1, -1), 2),
             ("RIGHTPADDING", (0, 0), (-1, -1), 2),
             ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
@@ -3559,39 +3760,99 @@ def _build_revenue_pdf(docs, label=""):
         t.drawOn(c, left, y - h)
         y -= h + 10
 
-    # ---- mode wise table ----
-    num_w = 26 * mm
-    last_w = 31 * mm
-    widths = [inner_w - num_w * 3 - last_w, num_w, num_w, num_w, last_w]
-    rows = []
-    for k in order:
-        b = modes[k]
-        rows.append([_fit(k, _FONT_NORMAL, 8.4, widths[0] - 6),
-                     str(b["orders"]),
-                     "Rs. " + _inr(b["adv"]),
-                     "Rs. " + _inr(b["due"]),
-                     "Rs. " + _inr(b["adv"] + b["due"])])
-    _table("KIS MODE ME KITNA",
-           ("Payment Mode", "Order", "Advanced", "Due", "Due + Advanced"),
-           rows, widths, (1, 2, 3, 4),
-           ["Total", str(tot["orders"]), "Rs. " + _inr(tot["adv"]),
-            "Rs. " + _inr(tot["due"]), "Rs. " + _inr(tot["adv"] + tot["due"])])
+    # ---- section 1: main date ----
+    if main_date is None:
+        _section("SAB DIN KA HISAB", label or "")
+    elif main_date == _today_iso():
+        _section("AAJ KA HISAB", label or "")
+    else:
+        _section("IS DATE KA HISAB", label or "")
 
-    # ---- overall hisab ----
-    two_w = 45 * mm
-    hisab_rows = [
-        ["Advanced wale order", str(tot["adv_orders"])],
-        ["Jinka due bacha hai", str(tot["due_orders"])],
-        ["Advanced mila", "Rs. " + _inr(tot["adv"])],
-        ["Due baki", "Rs. " + _inr(tot["due"])],
-    ]
-    _table("POORA HISAB", ("Detail", "Value"), hisab_rows,
-           [inner_w - two_w, two_w], (1,),
-           ["Due + Advanced (kul)", "Rs. " + _inr(tot["adv"] + tot["due"])])
+    col_last = 28 * mm
+    col_num = 22 * mm
+    w_main = [inner_w - col_num * 4 - col_last, 12 * mm, col_num, col_num, col_num, col_num, col_last]
+    rows = []
+    for r in led["main_rows"]:
+        rows.append([_fit(r["mode"], _FONT_NORMAL, 7.8, w_main[0] - 6),
+                     str(r["orders"]), _inr(r["adv"]), _inr(r["due"]),
+                     _inr(r["paid"]), _inr(r["remaining"]), _inr(r["adv"] + r["due"])])
+    _table("KIS MODE ME KITNA  (rashi Rs. me)",
+           ("Payment Mode", "Order", "Advanced", "Due Bana", "Due Mila", "Due Baki", "Due+Adv"),
+           rows or [["Is date ka koi order nahi.", "", "", "", "", "", ""]],
+           w_main, (1, 2, 3, 4, 5, 6),
+           ["Total", str(mt["orders"]), _inr(mt["adv"]), _inr(mt["due"]),
+            _inr(mt["paid"]), _inr(mt["remaining"]), _inr(mt["adv"] + mt["due"])])
+
+    # ---- cash flow ----
+    banner = "IS DATE PAR PAISA" if main_date else "SAB DIN KA PAISA"
+    _boxes((("PURANA DUE MILA", "Rs. " + _inr(ft["due_mila"])),
+            ("FAIL RETURN", "Rs. " + _inr(ft["ret"])),
+            ("NET CASH", "Rs. " + _inr(ft["net"]))), per_row=3, bh=34)
+    _section(banner, "advanced + purana due mila - fail return")
+
+    w_flow = [inner_w - 32 * mm * 4, 32 * mm, 32 * mm, 32 * mm, 32 * mm]
+    frows = []
+    for r in led["flow_rows"]:
+        net = r["adv"] + r["due_mila"] - r["ret"]
+        frows.append([_fit(r["mode"], _FONT_NORMAL, 7.8, w_flow[0] - 6),
+                      _inr(r["adv"]), _inr(r["due_mila"]), _inr(r["ret"]), _inr(net)])
+    _table("KIS MODE ME PAISA AAYA  (rashi Rs. me)",
+           ("Payment Mode", "Naya Advanced", "Purana Due Mila", "Fail Return", "Net"),
+           frows or [["Is date par koi cash movement nahi.", "", "", "", ""]],
+           w_flow, (1, 2, 3, 4),
+           ["Total", _inr(ft["adv"]), _inr(ft["due_mila"]), _inr(ft["ret"]), _inr(ft["net"])])
+
+    # ---- failed / returned orders (order date ke hisaab se) ----
+    if led["fails"]:
+        w_fail = [inner_w - 18 * mm - 20 * mm - 24 * mm - 22 * mm - 24 * mm,
+                  18 * mm, 20 * mm, 24 * mm, 22 * mm, 24 * mm]
+        frs = []
+        for r in led["fails"]:
+            frs.append([_fit(r["name"], _FONT_NORMAL, 7.8, w_fail[0] - 6),
+                        r["order_date"][5:] if r["order_date"] else "-",
+                        r["failed_date"][5:] if r["failed_date"] else "-",
+                        _fit(r["mode"], _FONT_NORMAL, 7.8, w_fail[3] - 6),
+                        _inr(r["refund"]), _inr(r["due_cancelled"])])
+        _table("FAIL / RETURN TICKET  (due cancel + paisa wapas)",
+               ("Ticket", "Order", "Fail", "Mode", "Return", "Due Cancel"),
+               frs, w_fail, (4, 5))
+
+    # ---- section 2: back date ----
+    if back_date and back_date != main_date:
+        _break_if(120)
+        c.setStrokeColor(colors.HexColor("#334155"))
+        c.setLineWidth(1.0)
+        c.line(left, y, page_w - right, y)
+        y -= 14
+        _section("PICHHLE DATE KA HISAB",
+                 "back date " + back_date + "  |  due mila " + _inr(bt["paid"]) +
+                 "  |  due baki " + _inr(bt["remaining"]))
+        w_back = [inner_w - 12 * mm - 28 * mm * 3, 12 * mm, 28 * mm, 28 * mm, 28 * mm, 28 * mm]
+        brows = []
+        for r in led["back_rows"]:
+            brows.append([_fit(r["mode"], _FONT_NORMAL, 7.8, w_back[0] - 6),
+                          str(r["orders"]), _inr(r["adv"]), _inr(r["due"]),
+                          _inr(r["paid"]), _inr(r["remaining"])])
+        _table("BACK DATE " + back_date + "  (rashi Rs. me)",
+               ("Payment Mode", "Order", "Advanced", "Due Bana", "Due Mila", "Due Baki"),
+               brows or [["Us date ka koi order nahi.", "", "", "", "", ""]],
+               w_back, (1, 2, 3, 4, 5),
+               ["Total", str(bt["orders"]), _inr(bt["adv"]), _inr(bt["due"]),
+                _inr(bt["paid"]), _inr(bt["remaining"])])
+        if led["back_fails"]:
+            for r in led["back_fails"]:
+                _break_if(22)
+                c.setFillColor(colors.HexColor("#57657a"))
+                c.setFont(_FONT_NORMAL, 8)
+                line = ("Fail: %s  |  return Rs. %s  |  due cancel Rs. %s"
+                        % (r["name"], _inr(r["refund"]), _inr(r["due_cancelled"])))
+                c.drawString(left + 2, y, _fit(line, _FONT_NORMAL, 8, inner_w - 4))
+                y -= 12
+            y -= 4
 
     # ---- amount in words ----
-    _break_if(80)
-    words_h = 62
+    _break_if(92)
+    words_h = 82
     c.saveState()
     c.setDash(2, 2)
     c.setStrokeColor(colors.HexColor("#93a2b8"))
@@ -3599,18 +3860,20 @@ def _build_revenue_pdf(docs, label=""):
     c.rect(left, y - words_h, inner_w, words_h, stroke=1, fill=0)
     c.restoreState()
     lines = [
-        ("Advanced mila:  Rs. " + _inr(tot["adv"]), _FONT_NORMAL),
-        ("Due baki:  Rs. " + _inr(tot["due"]), _FONT_NORMAL),
-        ("Due + Advanced:  Rs. " + _inr(tot["adv"] + tot["due"]), _FONT_BOLD),
-        ("Shabd me:  Rupees " + _in_words(tot["adv"] + tot["due"]) + " only", _FONT_ITALIC),
+        ("Order ka kul (Due + Advanced):  Rs. " + _inr(mt["adv"] + mt["due"]), _FONT_NORMAL),
+        ("Advanced mila:  Rs. " + _inr(mt["adv"]), _FONT_NORMAL),
+        ("Purana due mila:  Rs. " + _inr(ft["due_mila"]), _FONT_NORMAL),
+        ("Fail return:  Rs. " + _inr(ft["ret"]), _FONT_NORMAL),
+        ("Net cash (advanced + due mila - return):  Rs. " + _inr(ft["net"]), _FONT_BOLD),
+        ("Shabd me:  Rupees " + _in_words(ft["net"]) + " only", _FONT_ITALIC),
     ]
-    yy = y - 15
+    yy = y - 14
     for txt, font in lines:
         c.setFillColor(colors.HexColor("#334155" if font != _FONT_ITALIC else "#57657a"))
         c.setFont(font, 9)
         c.drawString(left + 8, yy, _fit(txt, font, 9, inner_w - 16))
-        yy -= 13
-    y -= words_h + 30
+        yy -= 12
+    y -= words_h + 26
 
     # ---- signature ----
     _break_if(34)
@@ -3630,37 +3893,191 @@ def _build_revenue_pdf(docs, label=""):
     return buf
 
 
+@app.route("/api/dues", methods=["GET"])
+@login_required
+def api_list_dues(user):
+    """Logged-in user ke saare due accept entries (hisab ke liye)."""
+    try:
+        docs = list(due_payments_col.find({"user_id": str(user["_id"])}).sort("accepted_at", -1))
+    except PyMongoError:
+        logger.exception("Could not load due payments")
+        return jsonify({"success": False, "error": "Due entries load nahi hui."}), 500
+    return jsonify({"success": True, "dues": [_serialize_due(d) for d in docs]})
+
+
+@app.route("/api/dues", methods=["POST"])
+@login_required
+@csrf_protected
+def api_accept_due(user):
+    """Back-date order ka due accept karo (payment mode ke saath)."""
+    data = request.get_json(silent=True) or request.form
+    ticket_id = str(data.get("ticket_id") or "").strip()
+    try:
+        oid = ObjectId(ticket_id)
+    except (InvalidId, TypeError):
+        return _json_error("Invalid ticket id.", 400)
+    doc = tickets_col.find_one({"_id": oid})
+    if doc is None:
+        return _json_error("Ticket not found.", 404)
+    if doc.get("user_id") != str(user["_id"]) and user.get("role") != "admin":
+        return _json_error("Is ticket ka due accept karne ki permission nahi hai.", 403)
+    if doc.get("failed"):
+        return _json_error("Fail ticket ka due accept nahi hota. Pehle fail undo karein.", 400)
+
+    info = _ticket_money(doc, _ticket_paid(str(oid)))
+    amount = _rev_amt(data.get("amount"))
+    if amount <= 0:
+        return _json_error("Due amount 0 se zyada hona chahiye.", 400)
+    if amount > info["remaining"]:
+        return _json_error("Itna due nahi hai. Baki due Rs. %s hai." % _inr(info["remaining"]), 400)
+
+    mode = str(data.get("pay_mode") or "").strip()
+    if not mode:
+        return _json_error("Payment mode chunein.", 400)
+    if len(mode) > 40:
+        return _json_error("Payment mode bahut lamba hai.", 400)
+    note = str(data.get("note") or "").strip()[:200]
+    today = _today_iso()
+    rec = {
+        "user_id": str(user["_id"]),
+        "username": user.get("username", ""),
+        "ticket_id": str(oid),
+        "order_date": _local_iso(doc.get("created_at")),
+        "amount": amount,
+        "pay_mode": mode,
+        "accepted_date": today,
+        "accepted_at": datetime.now(timezone.utc),
+        "note": note,
+    }
+    try:
+        result = due_payments_col.insert_one(rec)
+    except PyMongoError:
+        logger.exception("Could not save due payment")
+        return _json_error("Due accept save nahi hua.", 500)
+    rec["_id"] = result.inserted_id
+    return jsonify({
+        "success": True,
+        "message": "Rs. %s due accept ho gaya (%s)." % (_inr(amount), mode),
+        "due": _serialize_due(rec),
+        "remaining": info["remaining"] - amount,
+    }), 201
+
+
+@app.route("/api/tickets/<ticket_id>/fail", methods=["POST"])
+@login_required
+@csrf_protected
+def api_fail_ticket(user, ticket_id):
+    """Ticket fail/cancel — advanced (aur accepted due) return + baki due cancel."""
+    try:
+        oid = ObjectId(ticket_id)
+    except (InvalidId, TypeError):
+        return _json_error("Invalid ticket id.", 400)
+    doc = tickets_col.find_one({"_id": oid})
+    if doc is None:
+        return _json_error("Ticket not found.", 404)
+    if doc.get("user_id") != str(user["_id"]) and user.get("role") != "admin":
+        return _json_error("Is ticket ko fail karne ki permission nahi hai.", 403)
+    if doc.get("failed"):
+        return _json_error("Ticket pehle se fail hai.", 400)
+
+    data = request.get_json(silent=True) or request.form
+    paid_raw = _ticket_paid(str(oid))
+    info = _ticket_money(doc, paid_raw)
+    max_refund = info["adv"] + paid_raw
+    raw = data.get("refund_amount", None)
+    refund = max_refund if raw in (None, "") else _rev_amt(raw)
+    if refund > max_refund:
+        return _json_error("Return Rs. %s se zyada nahi ho sakta." % _inr(max_refund), 400)
+    mode = str(data.get("pay_mode") or "").strip() or info["mode"]
+    if len(mode) > 40:
+        return _json_error("Payment mode bahut lamba hai.", 400)
+    note = str(data.get("note") or "").strip()[:200]
+    now_utc = datetime.now(timezone.utc)
+    updates = {
+        "failed": True,
+        "failed_at": now_utc,
+        "failed_date": _today_iso(),
+        "refund_amount": refund,
+        "refund_mode": mode,
+        "refund_note": note,
+        "remaining_due_cancelled": max(info["due"] - info["paid"], 0),
+        "updated_at": now_utc,
+    }
+    try:
+        tickets_col.update_one({"_id": oid}, {"$set": updates})
+    except PyMongoError:
+        logger.exception("Could not mark ticket failed")
+        return _json_error("Ticket fail mark nahi hua.", 500)
+    doc.update(updates)
+    return jsonify({
+        "success": True,
+        "message": "Ticket fail mark hua. Rs. %s return + due cancel." % _inr(refund),
+        "ticket": _serialize_ticket(doc),
+    })
+
+
+@app.route("/api/tickets/<ticket_id>/unfail", methods=["POST"])
+@login_required
+@csrf_protected
+def api_unfail_ticket(user, ticket_id):
+    """Fail galti se laga ho to undo — accepted due wapas waisa hi rahega."""
+    try:
+        oid = ObjectId(ticket_id)
+    except (InvalidId, TypeError):
+        return _json_error("Invalid ticket id.", 400)
+    doc = tickets_col.find_one({"_id": oid})
+    if doc is None:
+        return _json_error("Ticket not found.", 404)
+    if doc.get("user_id") != str(user["_id"]) and user.get("role") != "admin":
+        return _json_error("Is ticket ko update karne ki permission nahi hai.", 403)
+    try:
+        tickets_col.update_one({"_id": oid}, {
+            "$unset": {
+                "failed": "", "failed_at": "", "failed_date": "",
+                "refund_amount": "", "refund_mode": "", "refund_note": "",
+                "remaining_due_cancelled": "",
+            },
+            "$set": {"updated_at": datetime.now(timezone.utc)},
+        })
+    except PyMongoError:
+        logger.exception("Could not undo ticket fail")
+        return _json_error("Fail undo nahi hua.", 500)
+    updated = tickets_col.find_one({"_id": oid})
+    return jsonify({"success": True, "message": "Fail undo ho gaya.", "ticket": _serialize_ticket(updated)})
+
+
 @app.route("/api/revenue/export", methods=["POST"])
 @login_required
 @csrf_protected
 def api_export_revenue_pdf(user):
-    """Revenue tab ka A4 hisab-kitab PDF."""
+    """Revenue tab ka A4 hisab-kitab PDF (do hisse: main date + back date)."""
     data = request.get_json(silent=True) or {}
-    ids = data.get("ids") or []
-    label = (data.get("label") or "").strip()
-    oids = []
-    for i in ids:
-        try:
-            oids.append(ObjectId(str(i)))
-        except (InvalidId, TypeError):
-            pass
-    if not oids:
-        return _json_error("Is filter me koi order nahi mila.", 400)
+    mode = str(data.get("mode") or "today").strip().lower()
+    label = str(data.get("label") or "").strip()
+    back_date = _valid_iso(data.get("back_date")) or _yesterday_iso()
+    if mode == "all":
+        main_date = None
+        label = label or "All Days"
+    else:
+        main_date = _valid_iso(data.get("date")) or _today_iso()
+        label = label or main_date
     try:
-        docs = list(tickets_col.find({"_id": {"$in": oids}, "user_id": str(user["_id"])}))
+        docs = list(tickets_col.find({"user_id": str(user["_id"])}))
+        dues = list(due_payments_col.find({"user_id": str(user["_id"])}))
     except PyMongoError:
         logger.exception("Could not load tickets for revenue export")
         return _json_error("Hisab load nahi ho saka.", 500)
     if not docs:
         return _json_error("Ek bhi order nahi mila.", 404)
     try:
-        buf = _build_revenue_pdf(docs, label)
+        buf = _build_revenue_pdf(docs, dues, main_date, back_date, label)
     except Exception:
         logger.exception("Revenue PDF generation failed")
         return _json_error("Revenue PDF ban nahi paayi.", 500)
     safe = label.strip().replace("\\", "-").replace("/", "-").replace(":", "-").replace("(", "").replace(")", "")
     fname = "Revenue-%s.pdf" % (safe or "All")
     return send_file(buf, mimetype="application/pdf", download_name=fname, as_attachment=True, max_age=0)
+
 
 
 # ---------------------------------------------------------------- Chat (login ke baad)# ---------------------------------------------------------------- Chat (login ke baad)
@@ -4052,8 +4469,9 @@ def api_bulk_add_fresh_ids(user):
 
 
 @app.route("/notepad")
-def notepad_page():
-    return render_template("notepad.html")
+@login_required
+def notepad_page(user):
+    return render_template("notepad.html", user=user)
 
 
 @app.route("/bulk-id")
@@ -4067,14 +4485,74 @@ def dashboard(user):
     return render_template("dashboard.html", user=user)
 
 
-def _serialize_note(doc, user):
+_NOTEPAD_STATE_ID = "board"
+
+
+def _note_coord(value, default):
+    """Notepad board par note ki position (canvas ka 0-100 percent)."""
+    try:
+        num = float(value)
+    except (TypeError, ValueError):
+        return float(default)
+    if num != num or num in (float("inf"), float("-inf")):
+        return float(default)
+    return round(max(0.0, min(100.0, num)), 3)
+
+
+def _note_iso(dt):
+    if not isinstance(dt, datetime):
+        return ""
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone().isoformat()
+
+
+def _notepad_selection():
+    try:
+        doc = notepad_state_col.find_one({"_id": _NOTEPAD_STATE_ID}) or {}
+    except PyMongoError:
+        logger.warning("Could not read notepad selection", exc_info=True)
+        return None
+    sel = doc.get("selection") or None
+    if not sel or not sel.get("note_id"):
+        return None
+    return sel
+
+
+def _selection_json(sel):
+    if not sel:
+        return None
+    return {
+        "note_id": str(sel.get("note_id") or ""),
+        "by": sel.get("by", ""),
+        "by_id": sel.get("by_id", ""),
+        "at": _note_iso(sel.get("at")),
+    }
+
+
+def _clear_notepad_selection(note_id=None):
+    if note_id is not None:
+        sel = _notepad_selection()
+        if not sel or str(sel.get("note_id") or "") != str(note_id):
+            return
+    try:
+        notepad_state_col.update_one(
+            {"_id": _NOTEPAD_STATE_ID}, {"$unset": {"selection": ""}}
+        )
+    except PyMongoError:
+        logger.warning("Could not clear notepad selection", exc_info=True)
+
+
+def _serialize_note(doc, user, index=0):
     author_id = doc.get("author_id", "")
     return {
         "id": str(doc["_id"]),
         "author": doc.get("author_name", ""),
         "author_id": author_id,
         "text": doc.get("text", ""),
-        "created_at": doc.get("created_at").isoformat() if hasattr(doc.get("created_at"), "isoformat") else "",
+        "x": _note_coord(doc.get("x"), 4 + (index % 3) * 26),
+        "y": _note_coord(doc.get("y"), 6 + (index % 4) * 14),
+        "created_at": _note_iso(doc.get("created_at")),
         "edited": bool(doc.get("edited_by")),
         "edited_by": doc.get("edited_by", ""),
         "mine": author_id == str((user or {}).get("_id", "")),
@@ -4087,10 +4565,17 @@ def api_get_notepad():
     if user is None:
         return jsonify({"success": False, "error": "login-required"}), 401
     docs = list(notes_col.find({}).sort("created_at", ASCENDING).limit(500))
+    sel = _notepad_selection()
+    if sel:
+        known_ids = {str(d["_id"]) for d in docs}
+        if str(sel.get("note_id") or "") not in known_ids:
+            _clear_notepad_selection()
+            sel = None
     return jsonify({
         "success": True,
         "me_id": str(user["_id"]),
-        "notes": [_serialize_note(d, user) for d in docs],
+        "notes": [_serialize_note(d, user, i) for i, d in enumerate(docs)],
+        "selection": _selection_json(sel),
     })
 
 
@@ -4110,6 +4595,8 @@ def api_save_notepad():
         "author_id": str(user["_id"]),
         "author_name": user.get("username", ""),
         "text": text,
+        "x": _note_coord(data.get("x"), 6),
+        "y": _note_coord(data.get("y"), 8),
         "created_at": datetime.now(timezone.utc),
     }
     try:
@@ -4128,21 +4615,34 @@ def api_edit_notepad(note_id):
     if user is None:
         return jsonify({"success": False, "error": "login-required"}), 401
     data = request.get_json(silent=True) or request.form
-    text = (data.get("text") or "").strip()
-    if not text:
-        return jsonify({"success": False, "error": "Kuch likho."}), 400
-    if len(text) > 2000:
-        return jsonify({"success": False, "error": "2000 characters se chhota rakho."}), 400
+    has_text = "text" in data
+    has_pos = "x" in data or "y" in data
+    if not has_text and not has_pos:
+        return jsonify({"success": False, "error": "Kuch badalne ke liye bhejo."}), 400
+    update = {}
+    if has_text:
+        text = (data.get("text") or "").strip()
+        if not text:
+            return jsonify({"success": False, "error": "Kuch likho."}), 400
+        if len(text) > 2000:
+            return jsonify({"success": False, "error": "2000 characters se chhota rakho."}), 400
+        update.update({
+            "text": text,
+            "edited_by": user.get("username", ""),
+            "updated_at": datetime.now(timezone.utc),
+        })
+    if "x" in data:
+        update["x"] = _note_coord(data.get("x"), 6)
+    if "y" in data:
+        update["y"] = _note_coord(data.get("y"), 8)
     try:
         oid = ObjectId(note_id)
     except (InvalidId, TypeError):
         return jsonify({"success": False, "error": "Galat note id."}), 400
     try:
-        notes_col.update_one(
-            {"_id": oid},
-            {"$set": {"text": text, "edited_by": user.get("username", ""),
-                      "updated_at": datetime.now(timezone.utc)}},
-        )
+        result = notes_col.update_one({"_id": oid}, {"$set": update})
+        if not result.matched_count:
+            return jsonify({"success": False, "error": "Note nahi mila."}), 404
         doc = notes_col.find_one({"_id": oid})
     except PyMongoError:
         logger.exception("Could not edit note")
@@ -4164,10 +4664,44 @@ def api_delete_notepad(note_id):
         return jsonify({"success": False, "error": "Galat note id."}), 400
     try:
         notes_col.delete_one({"_id": oid})
+        _clear_notepad_selection(note_id)
     except PyMongoError:
         logger.exception("Could not delete note")
         return jsonify({"success": False, "error": "Delete nahi hua."}), 500
     return jsonify({"success": True})
+
+
+@app.route("/api/notepad/select", methods=["POST"])
+@csrf_protected
+def api_select_notepad():
+    user = get_current_user()
+    if user is None:
+        return jsonify({"success": False, "error": "login-required"}), 401
+    data = request.get_json(silent=True) or request.form
+    note_id = str(data.get("note_id") or "").strip()
+    if not note_id:
+        _clear_notepad_selection()
+        return jsonify({"success": True, "selection": None})
+    try:
+        oid = ObjectId(note_id)
+    except (InvalidId, TypeError):
+        return jsonify({"success": False, "error": "Galat note id."}), 400
+    try:
+        if not notes_col.find_one({"_id": oid}, {"_id": 1}):
+            return jsonify({"success": False, "error": "Note nahi mila."}), 404
+        sel = {
+            "note_id": note_id,
+            "by": user.get("username", ""),
+            "by_id": str(user["_id"]),
+            "at": datetime.now(timezone.utc),
+        }
+        notepad_state_col.update_one(
+            {"_id": _NOTEPAD_STATE_ID}, {"$set": {"selection": sel}}, upsert=True
+        )
+    except PyMongoError:
+        logger.exception("Could not save notepad selection")
+        return jsonify({"success": False, "error": "Selection save nahi hui."}), 500
+    return jsonify({"success": True, "selection": _selection_json(sel)})
 
 
 # ---------------------------------------------------------------- CLI command

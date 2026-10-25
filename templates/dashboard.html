@@ -122,6 +122,7 @@
       <h2><span class="card-head-accent"></span>Revenue</h2>
       <div class="rev-head-actions">
         <button type="button" id="revRefreshBtn" class="btn btn-ghost btn-sm">Refresh</button>
+        <button type="button" id="revDueBtn" class="btn btn-ghost btn-sm">Accept Due</button>
         <button type="button" id="revPdfBtn" class="btn btn-ghost btn-sm">Download PDF</button>
         <button type="button" id="revPrintBtn" class="btn btn-primary btn-sm">Print</button>
       </div>
@@ -159,9 +160,89 @@
   </div>
 </div>
 
+<div id="dueModal" class="modal hidden" role="dialog" aria-modal="true">
+  <div class="modal-box modal-wide modal-due">
+    <div class="modal-head">
+      <h3>Accept Due / Fail Return</h3>
+      <button type="button" id="dueModalClose" class="btn btn-ghost btn-sm">Close</button>
+    </div>
+    <div class="due-wrap">
+      <div class="due-grid">
+        <label class="field">
+          <span>Order Date</span>
+          <select id="dueDateMode">
+            <option value="back" selected>1 Date Back</option>
+            <option value="custom">Choose From Calendar</option>
+          </select>
+        </label>
+        <label class="field custom-date-wrap hidden" id="dueCustomWrap">
+          <span>Choose Date</span>
+          <input type="date" id="dueCustomDate">
+        </label>
+      </div>
+      <div class="due-hint" id="dueDateHint"></div>
+
+      <div class="due-block">
+        <h4>Due Accept</h4>
+        <label class="field">
+          <span>Due Wala Order</span>
+          <select id="dueOrderSelect"></select>
+        </label>
+        <div class="due-grid">
+          <label class="field">
+            <span>Amount (Rs.)</span>
+            <input type="number" id="dueAmountInput" min="1" step="1" inputmode="numeric">
+          </label>
+          <label class="field">
+            <span>Payment Mode</span>
+            <select id="dueModeSelect"></select>
+          </label>
+        </div>
+        <label class="field">
+          <span>Note (optional)</span>
+          <input type="text" id="dueNoteInput" maxlength="200" placeholder="Jaise: customer ne cash diya" autocomplete="off">
+        </label>
+        <div class="due-actions">
+          <button type="button" id="dueAcceptBtn" class="btn btn-primary btn-sm">Accept Due</button>
+          <span id="dueAcceptMsg" class="due-msg"></span>
+        </div>
+      </div>
+
+      <div class="due-block">
+        <h4>Ticket Fail / Return</h4>
+        <div class="due-hint">Ticket nahi bani / cancel ho gayi? Advanced aur accepted due return karein, baki due cancel ho jayega.</div>
+        <label class="field">
+          <span>Ticket</span>
+          <select id="failTicketSelect"></select>
+        </label>
+        <div class="due-hint" id="failTicketInfo"></div>
+        <div class="due-grid">
+          <label class="field">
+            <span>Return Amount (Rs.)</span>
+            <input type="number" id="failAmountInput" min="0" step="1" inputmode="numeric">
+          </label>
+          <label class="field">
+            <span>Return Mode</span>
+            <select id="failModeSelect"></select>
+          </label>
+        </div>
+        <label class="field">
+          <span>Note (optional)</span>
+          <input type="text" id="failNoteInput" maxlength="200" placeholder="Jaise: train cancel" autocomplete="off">
+        </label>
+        <div class="due-actions">
+          <button type="button" id="failBtn" class="btn btn-danger btn-sm">Fail + Return</button>
+          <span id="failMsg" class="due-msg"></span>
+        </div>
+        <div id="failList" class="fail-list"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
 <div id="toastWrap" class="toast-wrap" aria-live="polite"></div>
 {% endblock %}
 
 {% block scripts %}
-<script src="{{ url_for('static', filename='js/dashboard.js') }}?v=57"></script>
+<script src="{{ url_for('static', filename='js/dashboard.js') }}?v=58"></script>
 {% endblock %}
