@@ -302,13 +302,14 @@
     if (name === "pdfs") loadPdfs();
     if (name === "fresh") loadFreshIds();
     if (name === "order") loadOrders();
+    if (name === "revenue") loadRevenue();
   }
   dashTabs.forEach(function (t) {
     t.addEventListener("click", function () { showTab(t.getAttribute("data-tab")); });
   });
 
   var initialTab = new URLSearchParams(window.location.search).get("tab");
-  if (initialTab && (initialTab === "fresh" || initialTab === "pdfs" || initialTab === "order")) {
+  if (initialTab && (initialTab === "fresh" || initialTab === "pdfs" || initialTab === "order" || initialTab === "revenue")) {
     showTab(initialTab);
   }
 
@@ -949,5 +950,226 @@
     });
   }
 
+  // ---------------- Revenue (A4 hisab kitab) ----------------
+  var ledgerPaper = document.getElementById("ledgerPaper");
+  var revDateFilter = document.getElementById("revDateFilter");
+  var revCustomDate = document.getElementById("revCustomDate");
+  var revCustomWrap = document.getElementById("revCustomWrap");
+  var revNote = document.getElementById("revNote");
+  var revRefreshBtn = document.getElementById("revRefreshBtn");
+  var revPdfBtn = document.getElementById("revPdfBtn");
+  var revPrintBtn = document.getElementById("revPrintBtn");
+  var revDateMode = "today";
+  var revTickets = [];
+  var REV_MODES = ["Cash", "Scan QR", "PhonePe", "Kausher Pe", "Chacha Pe"];
+
+  function amt(v) {
+    return parseInt(String(v == null ? "" : v).replace(/\D/g, ""), 10) || 0;
+  }
+
+  function money(n) {
+    return "Rs. " + Math.round(n || 0).toLocaleString("en-IN");
+  }
+
+  function inWords(num) {
+    num = Math.round(Math.abs(num || 0));
+    if (!num) return "Zero";
+    var one = ["", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine", "Ten",
+      "Eleven", "Twelve", "Thirteen", "Fourteen", "Fifteen", "Sixteen", "Seventeen", "Eighteen", "Nineteen"];
+    var ten = ["", "", "Twenty", "Thirty", "Forty", "Fifty", "Sixty", "Seventy", "Eighty", "Ninety"];
+    function two(n) {
+      if (n < 20) return one[n];
+      return ten[Math.floor(n / 10)] + (n % 10 ? " " + one[n % 10] : "");
+    }
+    function three(n) {
+      var out = "";
+      if (n >= 100) {
+        out = one[Math.floor(n / 100)] + " Hundred";
+        n %= 100;
+        if (n) out += " ";
+      }
+      return out + two(n);
+    }
+    var parts = [];
+    var crore = Math.floor(num / 10000000); num %= 10000000;
+    var lakh = Math.floor(num / 100000); num %= 100000;
+    var thousand = Math.floor(num / 1000); num %= 1000;
+    if (crore) parts.push(three(crore) + " Crore");
+    if (lakh) parts.push(three(lakh) + " Lakh");
+    if (thousand) parts.push(three(thousand) + " Thousand");
+    if (num) parts.push(three(num));
+    return parts.join(" ");
+  }
+
+  function revPass(t) {
+    if (revDateMode === "all") return true;
+    var iso = createdIso(t);
+    if (revDateMode === "today") return iso === localIso(new Date());
+    if (revDateMode === "custom") return revCustomDate && revCustomDate.value ? iso === revCustomDate.value : true;
+    return true;
+  }
+
+  function revRangeLabel() {
+    if (revDateMode === "today") return "Today (" + localIso(new Date()) + ")";
+    if (revDateMode === "custom" && revCustomDate && revCustomDate.value) return revCustomDate.value;
+    return "All Days";
+  }
+
+  function renderRevenue() {
+    if (!ledgerPaper) return;
+
+    function box(k, v) {
+      return '<div class="ledger-box"><div class="k">' + esc(k) + '</div><div class="v">' + esc(v) + '</div></div>';
+    }
+
+    var items = revTickets.filter(revPass);
+    var modes = {};
+    function bucket(name) {
+      if (!modes[name]) modes[name] = { orders: 0, total: 0, adv: 0, due: 0 };
+      return modes[name];
+    }
+    REV_MODES.forEach(bucket);
+
+    var sum = { orders: 0, total: 0, adv: 0, due: 0, advOrders: 0, dueOrders: 0 };
+    items.forEach(function (t) {
+      var total = amt(t.total);
+      var adv = String(t.pay || "") === "Advanced" ? amt(t.adv_amount) : 0;
+      if (adv > total) total = adv;
+      var due = Math.max(total - adv, 0);
+      var mode = String(t.pay_mode || "").trim() || "Not set";
+      var b = bucket(mode);
+      b.orders += 1; b.total += total; b.adv += adv; b.due += due;
+      sum.orders += 1; sum.total += total; sum.adv += adv; sum.due += due;
+      if (adv > 0) sum.advOrders += 1;
+      if (due > 0) sum.dueOrders += 1;
+    });
+
+    var order = REV_MODES.slice();
+    Object.keys(modes).forEach(function (k) { if (order.indexOf(k) === -1) order.push(k); });
+    order = order.filter(function (k) {
+      return modes[k] && (modes[k].orders > 0 || REV_MODES.indexOf(k) !== -1);
+    });
+
+    var now = new Date();
+    var dayStamp = now.toLocaleDateString("en-GB");
+    var timeStamp = now.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" });
+
+    var html = '<div class="ledger-head">'
+      + '<div><div class="ledger-title">HISAB KITAB</div>'
+      + '<div class="ledger-sub">Revenue &middot; ' + esc(revRangeLabel()) + '</div></div>'
+      + '<div class="ledger-meta"><div>' + sum.orders + ' order</div><div>' + esc(dayStamp + ", " + timeStamp) + '</div></div>'
+      + '</div>';
+
+    html += '<div class="ledger-summary">'
+      + box("Total Order", String(sum.orders))
+      + box("Total Amount", money(sum.total))
+      + box("Advanced Mila", money(sum.adv))
+      + box("Baki Due", money(sum.due))
+      + '</div>';
+
+    html += '<div class="ledger-sec">Kis mode me kitna</div>'
+      + '<table class="ledger-table"><thead><tr>'
+      + '<th>Payment Mode</th><th class="num">Order</th><th class="num">Advanced</th>'
+      + '<th class="num">Due</th><th class="num">Due + Advanced</th>'
+      + '</tr></thead><tbody>';
+    if (!items.length) {
+      html += '<tr><td colspan="5" class="ledger-empty">Is date ka koi order nahi hai.</td></tr>';
+    } else {
+      order.forEach(function (k) {
+        var b = modes[k];
+        html += '<tr><td>' + esc(k) + '</td><td class="num">' + b.orders + '</td>'
+          + '<td class="num">' + money(b.adv) + '</td><td class="num">' + money(b.due) + '</td>'
+          + '<td class="num">' + money(b.adv + b.due) + '</td></tr>';
+      });
+    }
+    html += '</tbody><tfoot><tr class="total"><td>Total</td><td class="num">' + sum.orders + '</td>'
+      + '<td class="num">' + money(sum.adv) + '</td><td class="num">' + money(sum.due) + '</td>'
+      + '<td class="num">' + money(sum.adv + sum.due) + '</td></tr></tfoot></table>';
+
+    html += '<div class="ledger-sec">Poora hisab</div>'
+      + '<table class="ledger-table ledger-plain"><tbody>'
+      + '<tr><td>Advanced wale order</td><td class="num">' + sum.advOrders + '</td></tr>'
+      + '<tr><td>Jinka due bacha hai</td><td class="num">' + sum.dueOrders + '</td></tr>'
+      + '<tr><td>Advanced mila</td><td class="num">' + money(sum.adv) + '</td></tr>'
+      + '<tr><td>Due baki</td><td class="num">' + money(sum.due) + '</td></tr>'
+      + '<tr class="total"><td>Due + Advanced (kul)</td><td class="num">' + money(sum.adv + sum.due) + '</td></tr>'
+      + '</tbody></table>';
+
+    html += '<div class="ledger-words">'
+      + '<div>Advanced mila: <b>' + money(sum.adv) + '</b></div>'
+      + '<div>Due baki: <b>' + money(sum.due) + '</b></div>'
+      + '<div>Due + Advanced: <b>' + money(sum.adv + sum.due) + '</b></div>'
+      + '<div class="ledger-inwords">Shabd me: <i>Rupees ' + esc(inWords(sum.adv + sum.due)) + ' only</i></div>'
+      + '</div>';
+
+    html += '<div class="ledger-sign"><span>Signature</span><span>Date: ' + esc(dayStamp) + '</span></div>';
+
+    ledgerPaper.innerHTML = html;
+    if (revNote) revNote.textContent = sum.orders + " order \u2022 " + revRangeLabel();
+  }
+
+  function loadRevenue() {
+    if (!ledgerPaper) return;
+    ledgerPaper.innerHTML = '<div class="empty">Hisab loading...</div>';
+    fetch("/api/tickets", { headers: { "X-CSRF-Token": csrf } })
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        if (data.success) {
+          revTickets = data.tickets || [];
+          renderRevenue();
+        } else {
+          ledgerPaper.innerHTML = '<div class="empty">Hisab load nahi hua.</div>';
+        }
+      })
+      .catch(function () { ledgerPaper.innerHTML = '<div class="empty">Network error.</div>'; });
+  }
+
+  if (revDateFilter) {
+    revDateFilter.addEventListener("change", function () {
+      revDateMode = revDateFilter.value;
+      if (revCustomWrap) revCustomWrap.classList.toggle("hidden", revDateMode !== "custom");
+      renderRevenue();
+    });
+  }
+  if (revCustomDate) revCustomDate.addEventListener("change", renderRevenue);
+  if (revRefreshBtn) revRefreshBtn.addEventListener("click", loadRevenue);
+  if (revPdfBtn) {
+    revPdfBtn.addEventListener("click", function () {
+      var items = revTickets.filter(revPass);
+      if (!items.length) { toast("Is filter me koi order nahi mila.", "err"); return; }
+      revPdfBtn.disabled = true;
+      revPdfBtn.textContent = "PDF ban raha hai...";
+      fetch("/api/revenue/export", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf },
+        body: JSON.stringify({
+          ids: items.map(function (t) { return t.id; }),
+          label: revRangeLabel()
+        })
+      })
+        .then(function (r) {
+          if (!r.ok) return r.json().then(function (d) { throw new Error((d && d.error) || "PDF nahi bani."); });
+          return r.blob();
+        })
+        .then(function (blob) {
+          var url = URL.createObjectURL(blob);
+          var a = document.createElement("a");
+          a.href = url;
+          a.download = "Revenue-" + revRangeLabel().replace(/[\\/:()]/g, "-") + ".pdf";
+          document.body.appendChild(a);
+          a.click();
+          setTimeout(function () { URL.revokeObjectURL(url); a.remove(); }, 1200);
+          toast("Revenue PDF download ho gayi.", "ok");
+        })
+        .catch(function (err) { toast(err.message || "PDF nahi bani.", "err"); })
+        .finally(function () {
+          revPdfBtn.disabled = false;
+          revPdfBtn.textContent = "Download PDF";
+        });
+    });
+  }
+  if (revPrintBtn) revPrintBtn.addEventListener("click", function () { window.print(); });
+
+  if (initialTab === "revenue") loadRevenue();
   if (pdfList) loadPdfs();
 })();

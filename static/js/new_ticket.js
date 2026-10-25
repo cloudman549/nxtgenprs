@@ -189,6 +189,32 @@
     totalRupeeSign.classList.toggle("hidden", totalAmountInput.value === "");
     rupeeSign.classList.toggle("hidden", advAmountInput.value === "");
 
+    // Edit mode: keep the saved payment mode (it used to fall back to Cash
+    // and silently overwrite the ticket's pay_mode on save).
+    if (payModeInput) {
+      var savedMode = t.pay_mode || "";
+      var modeFound = false;
+      for (var mi = 0; mi < payModeInput.options.length; mi++) {
+        if (payModeInput.options[mi].value === savedMode) { modeFound = true; break; }
+      }
+      if (!savedMode) {
+        // Nothing was set on this ticket before -> keep it that way.
+        if (!modeFound) {
+          var emptyOpt = document.createElement("option");
+          emptyOpt.value = "";
+          emptyOpt.textContent = "\u2014";
+          payModeInput.insertBefore(emptyOpt, payModeInput.firstChild);
+        }
+      } else if (!modeFound) {
+        // Old/custom value -> keep it instead of losing it to the default.
+        var modeOpt = document.createElement("option");
+        modeOpt.value = savedMode;
+        modeOpt.textContent = savedMode;
+        payModeInput.appendChild(modeOpt);
+      }
+      payModeInput.value = savedMode;
+    }
+
     var paid = t.pay === "Advanced";
     payToggle.querySelectorAll(".pay-opt").forEach(function (o) {
       o.classList.toggle("active", o.getAttribute("data-val") === t.pay);

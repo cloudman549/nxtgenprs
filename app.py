@@ -2918,7 +2918,9 @@ def api_update_ticket(user, ticket_id):
         "alt_mobile": (data.get("alt_mobile") or "").strip(),
         "slot_id": (data.get("slot_id") or "").strip(),
         "pay": (data.get("pay") or "").strip(),
-        "pay_mode": (data.get("pay_mode") or "").strip(),
+        "pay_mode": str(
+            data["pay_mode"] if "pay_mode" in data else doc.get("pay_mode") or ""
+        ).strip(),
         "total": (data.get("total") or "").strip(),
         "adv_amount": (data.get("adv_amount") or "").strip(),
         "desc": (data.get("desc") or "").strip(),
@@ -3192,14 +3194,32 @@ def _build_orders_pdf(docs, label=""):
                 break
         return t, cls_txt, hdr_h, ch, alt_cls
 
-    docs_sorted = sorted(docs, key=lambda d: (
+    # Same FROM -> TO orders must sit next to each other. Pages are filled
+    # exactly like before (12 per page); only the card order changed.
+    def _norm_station(v):
+        """'NEW DELHI - NDLS' and 'NDLS' are the same station."""
+        s = str(v or "").strip().upper()
+        if not s:
+            return "-"
+        if " - " in s:
+            code = s.rsplit(" - ", 1)[1].strip()
+            if code:
+                return code
+        return s
+
+    _buckets = {}
+    for _d in sorted(docs, key=lambda d: (
         str(d.get("date") or "").strip(),
-        str(d.get("src") or "").strip(),
-        str(d.get("dst") or "").strip(),
         str(d.get("train") or "").strip(),
         str(d.get("quota") or "GN").strip(),
         str(d.get("cls") or "").strip(),
-    ))
+    )):
+        _buckets.setdefault(
+            (_norm_station(_d.get("src")), _norm_station(_d.get("dst"))), []
+        ).append(_d)
+
+    # flatten: same FROM -> TO stay next to each other, then normal page fill
+    docs_sorted = [_d for _key in sorted(_buckets) for _d in _buckets[_key]]
 
     buf = io.BytesIO()
     c = _canvas.Canvas(buf, pagesize=A4, title="Order Report", author="NXTGen PRS")
@@ -3323,6 +3343,323 @@ def api_export_orders_pdf(user):
         logger.exception("PDF generation failed")
         return _json_error("PDF ban nahi paayi.", 500)
     fname = f"Orders-{label.strip().replace(chr(92), '').replace('/', '-') or 'All'}.pdf"
+    return send_file(buf, mimetype="application/pdf", download_name=fname, as_attachment=True, max_age=0)
+
+
+# ---------------------------------------------------------------- Revenue PDF
+_REV_MODES = ("Cash", "Scan QR", "PhonePe", "Kausher Pe", "Chacha Pe")
+
+
+def _inr(n):
+    """1234567 -> '12,34,567' (Indian grouping)."""
+    n = int(round(n or 0))
+    sign = "-" if n < 0 else ""
+    s = str(abs(n))
+    if len(s) > 3:
+        head, tail = s[:-3], s[-3:]
+        groups = []
+        while len(head) > 2:
+            groups.insert(0, head[-2:])
+            head = head[:-2]
+        if head:
+            groups.insert(0, head)
+        s = ",".join(groups) + "," + tail
+    return sign + s
+
+
+_W_ONES = ("", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine",
+           "Ten", "Eleven", "Twelve", "Thirteen", "Fourteen", "Fifteen", "Sixteen",
+           "Seventeen", "Eighteen", "Nineteen")
+_W_TENS = ("", "", "Twenty", "Thirty", "Forty", "Fifty", "Sixty", "Seventy", "Eighty", "Ninety")
+
+
+def _words_2(n):
+    if n < 20:
+        return _W_ONES[n]
+    return _W_TENS[n // 10] + ((" " + _W_ONES[n % 10]) if n % 10 else "")
+
+
+def _words_3(n):
+    out = ""
+    if n >= 100:
+        out = _W_ONES[n // 100] + " Hundred"
+        n %= 100
+        if n:
+            out += " "
+    return out + _words_2(n)
+
+
+def _in_words(num):
+    num = int(round(abs(num or 0)))
+    if not num:
+        return "Zero"
+    parts = []
+    for div, name in ((10000000, "Crore"), (100000, "Lakh"), (1000, "Thousand")):
+        if num >= div:
+            parts.append(_words_3(num // div) + " " + name)
+            num %= div
+    if num:
+        parts.append(_words_3(num))
+    return " ".join(parts)
+
+
+def _rev_amt(v):
+    s = "".join(ch for ch in str(v or "") if ch.isdigit())
+    return int(s) if s else 0
+
+
+def _revenue_rows(docs):
+    """Same hisab as the dashboard: mode-wise advanced / due / due+advanced."""
+    modes = {m: {"orders": 0, "total": 0, "adv": 0, "due": 0} for m in _REV_MODES}
+    tot = {"orders": 0, "total": 0, "adv": 0, "due": 0, "adv_orders": 0, "due_orders": 0}
+    for d in docs:
+        total = _rev_amt(d.get("total"))
+        adv = _rev_amt(d.get("adv_amount")) if str(d.get("pay") or "") == "Advanced" else 0
+        if adv > total:
+            total = adv
+        due = max(total - adv, 0)
+        mode = str(d.get("pay_mode") or "").strip() or "Not set"
+        b = modes.setdefault(mode, {"orders": 0, "total": 0, "adv": 0, "due": 0})
+        for k, v in (("orders", 1), ("total", total), ("adv", adv), ("due", due)):
+            b[k] += v
+            tot[k] += v
+        if adv > 0:
+            tot["adv_orders"] += 1
+        if due > 0:
+            tot["due_orders"] += 1
+    order = list(_REV_MODES)
+    for k in modes:
+        if k not in order:
+            order.append(k)
+    order = [k for k in order if modes[k]["orders"] > 0 or k in _REV_MODES]
+    return order, modes, tot
+
+
+def _build_revenue_pdf(docs, label=""):
+    """A4 hisab-kitab sheet (same numbers as the dashboard Revenue tab)."""
+    page_w, page_h = A4
+    left = 16 * mm
+    right = 16 * mm
+    top = 15 * mm
+    bottom = 16 * mm
+    inner_w = page_w - left - right
+
+    order, modes, tot = _revenue_rows(docs)
+    now = datetime.now()
+    stamp = now.strftime("%d/%m/%Y, %I:%M %p")
+
+    buf = io.BytesIO()
+    c = _canvas.Canvas(buf, pagesize=A4, title="Revenue - Hisab Kitab", author="NXTGen PRS")
+
+    def _paper():
+        c.setFillColor(colors.HexColor("#fffdf6"))
+        c.rect(0, 0, page_w, page_h, stroke=0, fill=1)
+        c.setFillColor(colors.HexColor("#f0b4b4"))
+        c.rect(left - 7 * mm, 0, 0.7, page_h, stroke=0, fill=1)
+        return page_h - top
+
+    y = _paper()
+
+    def _fit(txt, font, size, width):
+        txt = str(txt or "")
+        if _pdfmetrics.stringWidth(txt, font, size) <= width:
+            return txt
+        while txt and _pdfmetrics.stringWidth(txt + "...", font, size) > width:
+            txt = txt[:-1]
+        return txt.rstrip() + "..."
+
+    def _break_if(space):
+        nonlocal y
+        if y - space < bottom:
+            c.showPage()
+            y = _paper()
+            c.setFillColor(colors.HexColor("#57657a"))
+            c.setFont(_FONT_NORMAL, 8.5)
+            c.drawString(left, y - 10, "HISAB KITAB (continued)  |  " + (label or "All Days"))
+            c.setStrokeColor(colors.HexColor("#334155"))
+            c.setLineWidth(0.8)
+            c.line(left, y - 15, page_w - right, y - 15)
+            y -= 28
+
+    # ---- header ----
+    c.setFillColor(colors.HexColor("#1f2937"))
+    c.setFont(_FONT_BOLD, 18)
+    c.drawString(left, y - 15, "HISAB KITAB")
+    c.setFillColor(colors.HexColor("#57657a"))
+    c.setFont(_FONT_NORMAL, 9)
+    c.drawString(left, y - 29, "Revenue  |  " + (label or "All Days"))
+    c.drawRightString(page_w - right, y - 13, "%d order" % tot["orders"])
+    c.drawRightString(page_w - right, y - 26, stamp)
+    y -= 38
+    c.setStrokeColor(colors.HexColor("#334155"))
+    c.setLineWidth(1.2)
+    c.line(left, y, page_w - right, y)
+    y -= 16
+
+    # ---- summary boxes ----
+    boxes = (("TOTAL ORDER", str(tot["orders"])),
+             ("TOTAL AMOUNT", "Rs. " + _inr(tot["total"])),
+             ("ADVANCED MILA", "Rs. " + _inr(tot["adv"])),
+             ("BAKI DUE", "Rs. " + _inr(tot["due"])))
+    box_gap = 6
+    bw = (inner_w - box_gap * 3) / 4.0
+    bh = 38
+    for i, (k, v) in enumerate(boxes):
+        x = left + i * (bw + box_gap)
+        c.saveState()
+        c.setDash(2, 2)
+        c.setStrokeColor(colors.HexColor("#93a2b8"))
+        c.setLineWidth(0.6)
+        c.rect(x, y - bh, bw, bh, stroke=1, fill=0)
+        c.restoreState()
+        c.setFillColor(colors.HexColor("#64748b"))
+        c.setFont(_FONT_BOLD, 6.2)
+        c.drawString(x + 6, y - 12, k)
+        c.setFillColor(colors.HexColor("#1f2937"))
+        c.setFont(_FONT_BOLD, 11)
+        c.drawString(x + 6, y - 27, _fit(v, _FONT_BOLD, 11, bw - 12))
+    y -= bh + 22
+
+    def _table(title, header, rows, widths, right_cols, total_row=None):
+        nonlocal y
+        _break_if(30 + 14 * (len(rows) + 1))
+        c.setFillColor(colors.HexColor("#334155"))
+        c.setFont(_FONT_BOLD, 8.4)
+        c.drawString(left, y, title)
+        y -= 13
+        data = [list(header)] + rows + ([total_row] if total_row else [])
+        t = Table(data, colWidths=widths, hAlign="LEFT")
+        cmds = [
+            ("FONTNAME", (0, 0), (-1, -1), _FONT_NORMAL),
+            ("FONTNAME", (0, 0), (-1, 0), _FONT_BOLD),
+            ("FONTSIZE", (0, 0), (-1, -1), 8.4),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.HexColor("#334155")),
+            ("TEXTCOLOR", (0, 1), (-1, -1), colors.HexColor("#1f2937")),
+            ("LINEBELOW", (0, 0), (-1, 0), 1.0, colors.HexColor("#334155")),
+            ("TOPPADDING", (0, 0), (-1, -1), 4.5),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 4.5),
+            ("LEFTPADDING", (0, 0), (-1, -1), 2),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 2),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ]
+        last_body = (len(data) - 2) if total_row else (len(data) - 1)
+        if last_body >= 1:
+            cmds.append(("LINEBELOW", (0, 1), (-1, last_body), 0.4,
+                         colors.HexColor("#94a3b8")))
+        for col in right_cols:
+            cmds.append(("ALIGN", (col, 0), (col, -1), "RIGHT"))
+        if total_row:
+            r = len(data) - 1
+            cmds += [
+                ("FONTNAME", (0, r), (-1, r), _FONT_BOLD),
+                ("LINEABOVE", (0, r), (-1, r), 1.0, colors.HexColor("#334155")),
+            ]
+        t.setStyle(TableStyle(cmds))
+        _w, h = t.wrap(inner_w, 10 ** 9)
+        t.drawOn(c, left, y - h)
+        y -= h + 10
+
+    # ---- mode wise table ----
+    num_w = 26 * mm
+    last_w = 31 * mm
+    widths = [inner_w - num_w * 3 - last_w, num_w, num_w, num_w, last_w]
+    rows = []
+    for k in order:
+        b = modes[k]
+        rows.append([_fit(k, _FONT_NORMAL, 8.4, widths[0] - 6),
+                     str(b["orders"]),
+                     "Rs. " + _inr(b["adv"]),
+                     "Rs. " + _inr(b["due"]),
+                     "Rs. " + _inr(b["adv"] + b["due"])])
+    _table("KIS MODE ME KITNA",
+           ("Payment Mode", "Order", "Advanced", "Due", "Due + Advanced"),
+           rows, widths, (1, 2, 3, 4),
+           ["Total", str(tot["orders"]), "Rs. " + _inr(tot["adv"]),
+            "Rs. " + _inr(tot["due"]), "Rs. " + _inr(tot["adv"] + tot["due"])])
+
+    # ---- overall hisab ----
+    two_w = 45 * mm
+    hisab_rows = [
+        ["Advanced wale order", str(tot["adv_orders"])],
+        ["Jinka due bacha hai", str(tot["due_orders"])],
+        ["Advanced mila", "Rs. " + _inr(tot["adv"])],
+        ["Due baki", "Rs. " + _inr(tot["due"])],
+    ]
+    _table("POORA HISAB", ("Detail", "Value"), hisab_rows,
+           [inner_w - two_w, two_w], (1,),
+           ["Due + Advanced (kul)", "Rs. " + _inr(tot["adv"] + tot["due"])])
+
+    # ---- amount in words ----
+    _break_if(80)
+    words_h = 62
+    c.saveState()
+    c.setDash(2, 2)
+    c.setStrokeColor(colors.HexColor("#93a2b8"))
+    c.setLineWidth(0.6)
+    c.rect(left, y - words_h, inner_w, words_h, stroke=1, fill=0)
+    c.restoreState()
+    lines = [
+        ("Advanced mila:  Rs. " + _inr(tot["adv"]), _FONT_NORMAL),
+        ("Due baki:  Rs. " + _inr(tot["due"]), _FONT_NORMAL),
+        ("Due + Advanced:  Rs. " + _inr(tot["adv"] + tot["due"]), _FONT_BOLD),
+        ("Shabd me:  Rupees " + _in_words(tot["adv"] + tot["due"]) + " only", _FONT_ITALIC),
+    ]
+    yy = y - 15
+    for txt, font in lines:
+        c.setFillColor(colors.HexColor("#334155" if font != _FONT_ITALIC else "#57657a"))
+        c.setFont(font, 9)
+        c.drawString(left + 8, yy, _fit(txt, font, 9, inner_w - 16))
+        yy -= 13
+    y -= words_h + 30
+
+    # ---- signature ----
+    _break_if(34)
+    c.setStrokeColor(colors.HexColor("#94a3b8"))
+    c.setLineWidth(0.5)
+    c.setDash(1, 2)
+    c.line(left, y, left + 45 * mm, y)
+    c.line(page_w - right - 45 * mm, y, page_w - right, y)
+    c.setDash()
+    c.setFillColor(colors.HexColor("#57657a"))
+    c.setFont(_FONT_NORMAL, 8)
+    c.drawString(left, y - 10, "Signature")
+    c.drawRightString(page_w - right, y - 10, "Date: " + now.strftime("%d/%m/%Y"))
+
+    c.save()
+    buf.seek(0)
+    return buf
+
+
+@app.route("/api/revenue/export", methods=["POST"])
+@login_required
+@csrf_protected
+def api_export_revenue_pdf(user):
+    """Revenue tab ka A4 hisab-kitab PDF."""
+    data = request.get_json(silent=True) or {}
+    ids = data.get("ids") or []
+    label = (data.get("label") or "").strip()
+    oids = []
+    for i in ids:
+        try:
+            oids.append(ObjectId(str(i)))
+        except (InvalidId, TypeError):
+            pass
+    if not oids:
+        return _json_error("Is filter me koi order nahi mila.", 400)
+    try:
+        docs = list(tickets_col.find({"_id": {"$in": oids}, "user_id": str(user["_id"])}))
+    except PyMongoError:
+        logger.exception("Could not load tickets for revenue export")
+        return _json_error("Hisab load nahi ho saka.", 500)
+    if not docs:
+        return _json_error("Ek bhi order nahi mila.", 404)
+    try:
+        buf = _build_revenue_pdf(docs, label)
+    except Exception:
+        logger.exception("Revenue PDF generation failed")
+        return _json_error("Revenue PDF ban nahi paayi.", 500)
+    safe = label.strip().replace("\\", "-").replace("/", "-").replace(":", "-").replace("(", "").replace(")", "")
+    fname = "Revenue-%s.pdf" % (safe or "All")
     return send_file(buf, mimetype="application/pdf", download_name=fname, as_attachment=True, max_age=0)
 
 

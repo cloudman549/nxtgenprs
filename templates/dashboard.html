@@ -8,6 +8,7 @@
   <button type="button" class="dash-tab active" data-tab="pdfs">Available PDF</button>
   <button type="button" class="dash-tab" data-tab="fresh">Available Fresh ID</button>
   <button type="button" class="dash-tab" data-tab="order">Order</button>
+  <button type="button" class="dash-tab" data-tab="revenue">Revenue</button>
 </div>
 
 <section id="filesSection" data-section="pdfs" class="files-section">
@@ -115,6 +116,39 @@
   </div>
 </section>
 
+<section id="revenueSection" data-section="revenue" class="files-section hidden">
+  <div class="card">
+    <div class="list-head">
+      <h2><span class="card-head-accent"></span>Revenue</h2>
+      <div class="rev-head-actions">
+        <button type="button" id="revRefreshBtn" class="btn btn-ghost btn-sm">Refresh</button>
+        <button type="button" id="revPdfBtn" class="btn btn-ghost btn-sm">Download PDF</button>
+        <button type="button" id="revPrintBtn" class="btn btn-primary btn-sm">Print</button>
+      </div>
+    </div>
+    <div class="rev-toolbar">
+      <label class="field list-datefilter">
+        <span>Date</span>
+        <select id="revDateFilter">
+          <option value="today" selected>Today</option>
+          <option value="all">All Days</option>
+          <option value="custom">Choose From Calendar</option>
+        </select>
+      </label>
+      <label class="field list-datefilter custom-date-wrap hidden" id="revCustomWrap">
+        <span>Choose Date</span>
+        <input type="date" id="revCustomDate">
+      </label>
+      <div class="rev-note" id="revNote"></div>
+    </div>
+    <div class="ledger-wrap">
+      <div class="ledger-paper" id="ledgerPaper">
+        <div class="empty">Hisab loading...</div>
+      </div>
+    </div>
+  </div>
+</section>
+
 <div id="orderModal" class="modal hidden" role="dialog" aria-modal="true">
   <div class="modal-box modal-wide">
     <div class="modal-head">
@@ -129,5 +163,5 @@
 {% endblock %}
 
 {% block scripts %}
-<script src="{{ url_for('static', filename='js/dashboard.js') }}?v=55"></script>
+<script src="{{ url_for('static', filename='js/dashboard.js') }}?v=57"></script>
 {% endblock %}
